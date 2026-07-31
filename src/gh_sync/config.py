@@ -18,6 +18,9 @@ LOG_DIR = REPO_ROOT / "logs"
 ENV_FILE = REPO_ROOT / ".env"
 
 STATE_DB = DATA_DIR / "state.db"
+# hevy2garmin's own ledger. Flow B consults it so an activity that flow A has
+# already paired with a Hevy workout is never re-imported.
+HEVY2GARMIN_DB = Path("~/.hevy2garmin/sync.db").expanduser()
 EXERCISE_MAP_FILE = DATA_DIR / "exercise_map.json"
 GARMIN_TOKENS = Path("~/.garminconnect").expanduser()
 

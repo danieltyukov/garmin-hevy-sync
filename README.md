@@ -48,15 +48,26 @@ heart rate and training load, and `replace` throws exactly that away.
 
 ## Loop prevention
 
-Bidirectional sync without guards ping-pongs forever. Three defences:
+Bidirectional sync without guards ping-pongs forever. Four defences:
 
-1. **Overlap check.** Flow B skips any Garmin activity starting within
-   `GH_OVERLAP_MINUTES` (default 45) of an existing Hevy workout.
-2. **Cross-marking.** When flow B creates a Hevy workout it immediately runs
+1. **Pairing check.** Flow B reads hevy2garmin's ledger
+   (`~/.hevy2garmin/sync.db`, table `synced_workouts`) and skips any Garmin
+   activity already paired with a Hevy workout. This is the load-bearing one:
+   hevy2garmin matches within 30 minutes *but also falls back to the same
+   calendar day*, so a session logged into Hevy hours after the watch recorded
+   it still merges correctly. The time-based check below would miss that
+   pairing and import the activity a second time.
+2. **Overlap check.** Flow B skips any Garmin activity starting within
+   `GH_OVERLAP_MINUTES` (default 45) of an existing Hevy workout. Covers the
+   window before flow A has written its ledger entry.
+3. **Cross-marking.** When flow B creates a Hevy workout it immediately runs
    `hevy2garmin mark-synced <hevy_id> --garmin-id <activity_id>`, writing into
    hevy2garmin's own ledger so flow A never pushes it back.
-3. **Local ledger.** `data/state.db` records every Garmin activity that flow B
+4. **Local ledger.** `data/state.db` records every Garmin activity that flow B
    has imported or deliberately skipped. Only `failed` rows are retried.
+
+The layering is deliberate: 1 and 2 catch different failure modes, and either
+alone leaves a hole.
 
 ## Setup on a new machine
 

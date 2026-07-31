@@ -13,10 +13,11 @@ import logging
 import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from . import state
-from .config import Settings, hevy2garmin_binary
+from .config import HEVY2GARMIN_DB, Settings, hevy2garmin_binary
 from .convert import build_hevy_workout
 from .exercise_map import ExerciseMapper
 from .garmin_client import exercise_sets, parse_start, strength_activities, body_composition
@@ -57,6 +58,36 @@ def recent_hevy_starts(hevy: HevyClient, lookback_days: int) -> list[datetime]:
 def _overlaps(start: datetime, hevy_starts: list[datetime], minutes: int) -> bool:
     window = timedelta(minutes=minutes)
     return any(abs(start - other) <= window for other in hevy_starts)
+
+
+def claimed_garmin_activity_ids(db_path: Path = HEVY2GARMIN_DB) -> set[str]:
+    """Garmin activities that flow A has already paired with a Hevy workout.
+
+    The start-time overlap check alone is not enough. hevy2garmin matches within
+    +/-30 minutes but also falls back to the same calendar day, so a session
+    logged into Hevy hours after the watch recorded it still gets merged
+    correctly by flow A. Flow B, comparing only start times, would see no
+    nearby Hevy workout and import that same activity a second time.
+
+    Reading the pairing straight out of hevy2garmin's ledger closes that gap
+    regardless of how far apart the two timestamps drift. Best-effort: a
+    missing or unreadable database just means falling back to the time check.
+    """
+    if not db_path.exists():
+        return set()
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT garmin_activity_id FROM synced_workouts "
+                "WHERE garmin_activity_id IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        logger.warning("Could not read hevy2garmin ledger at %s: %s", db_path, exc)
+        return set()
+    return {str(row[0]) for row in rows if row[0]}
 
 
 def _mark_synced_in_hevy2garmin(hevy_workout_id: str, garmin_activity_id: Any) -> None:
@@ -103,11 +134,22 @@ def flow_b_garmin_to_hevy(
     hevy_starts = recent_hevy_starts(hevy, settings.lookback_days)
     logger.info("Found %s Hevy workouts in the lookback window", len(hevy_starts))
 
+    claimed = claimed_garmin_activity_ids()
+    logger.info("%s Garmin activities already paired by flow A", len(claimed))
+
     for activity in strength_activities(garmin, settings.lookback_days):
         activity_id = str(activity.get("activityId"))
         counters["considered"] += 1
 
         if state.already_handled(conn, activity_id):
+            continue
+
+        if activity_id in claimed:
+            state.record(
+                conn, activity_id, state.SKIPPED,
+                note="already paired with a Hevy workout by hevy2garmin",
+            )
+            counters["skipped"] += 1
             continue
 
         start = parse_start(activity)

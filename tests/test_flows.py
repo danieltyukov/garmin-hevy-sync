@@ -144,3 +144,64 @@ class TestExtractWorkoutId:
 
         for payload in ({}, {"workout": []}, {"workout": [{}]}, [], None, "nope"):
             assert extract_workout_id(payload) is None
+
+
+class TestClaimedGarminActivityIds:
+    """Flow B must not re-import an activity flow A already paired."""
+
+    @staticmethod
+    def _make_db(path, rows):
+        import sqlite3
+
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE synced_workouts (hevy_id TEXT, garmin_activity_id TEXT)"
+        )
+        conn.executemany("INSERT INTO synced_workouts VALUES (?, ?)", rows)
+        conn.commit()
+        conn.close()
+
+    def test_reads_paired_activity_ids(self, tmp_path):
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        db = tmp_path / "sync.db"
+        self._make_db(db, [("hevy-1", "23769638795"), ("hevy-2", "999")])
+        assert claimed_garmin_activity_ids(db) == {"23769638795", "999"}
+
+    def test_ignores_unpaired_rows(self, tmp_path):
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        db = tmp_path / "sync.db"
+        self._make_db(db, [("hevy-1", None), ("hevy-2", ""), ("hevy-3", "42")])
+        assert claimed_garmin_activity_ids(db) == {"42"}
+
+    def test_ids_are_strings_regardless_of_storage_type(self, tmp_path):
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        db = tmp_path / "sync.db"
+        self._make_db(db, [("hevy-1", 23769638795)])
+        assert claimed_garmin_activity_ids(db) == {"23769638795"}
+
+    def test_missing_database_is_not_an_error(self, tmp_path):
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        assert claimed_garmin_activity_ids(tmp_path / "absent.db") == set()
+
+    def test_unreadable_database_falls_back_to_empty(self, tmp_path):
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        db = tmp_path / "sync.db"
+        db.write_text("this is not a sqlite database")
+        assert claimed_garmin_activity_ids(db) == set()
+
+    def test_schema_without_the_table_falls_back_to_empty(self, tmp_path):
+        import sqlite3
+
+        from gh_sync.flows import claimed_garmin_activity_ids
+
+        db = tmp_path / "sync.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE something_else (x TEXT)")
+        conn.commit()
+        conn.close()
+        assert claimed_garmin_activity_ids(db) == set()
