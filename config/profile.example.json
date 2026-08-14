@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy to config/profile.json and edit. Non-secret hevy2garmin settings, applied by bin/bootstrap.sh; secrets stay in .env. user_profile feeds the Keytel calorie formula, so wrong values only mean wrong calorie estimates, nothing breaks. Your real profile.json is gitignored.",
+  "user_profile": {
+    "weight_kg": 70.0,
+    "birth_year": 1990,
+    "sex": "male",
+    "vo2max": 40.0
+  },
+  "merge_watch_strategy": "merge",
+  "hr_fusion": {
+    "enabled": true
+  },
+  "sync": {
+    "skip_existing": true
+  },
+  "auto_sync": {
+    "enabled": false
+  }
+}

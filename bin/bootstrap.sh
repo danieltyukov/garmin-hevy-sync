@@ -47,6 +47,18 @@ echo "All three credentials present."
 step "Tests"
 .venv/bin/pytest -q
 
+step "Profile"
+# Holds your body stats, which are personal rather than secret, so the repo
+# ships only the template and gitignores the real file.
+if [ ! -f config/profile.json ]; then
+  cp config/profile.example.json config/profile.json
+  echo "Created config/profile.json from the template."
+  echo "Edit user_profile (weight, birth year, sex, VO2 max) for accurate"
+  echo "calorie estimates. Placeholder values work, they are just less precise."
+else
+  echo "config/profile.json already present."
+fi
+
 step "hevy2garmin settings"
 # These live in ~/.hevy2garmin/config.json, outside the repo, so the choices
 # encoded in config/profile.json have to be reapplied on every new machine.
