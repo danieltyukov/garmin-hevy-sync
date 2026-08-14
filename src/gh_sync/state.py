@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS body_measurements (
     synced_at   TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS exercise_names_fixed (
+    garmin_activity_id TEXT PRIMARY KEY,
+    fixed_at           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
@@ -102,6 +107,23 @@ def record_body_measurement(conn: sqlite3.Connection, measured_on: str) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO body_measurements (measured_on, synced_at) VALUES (?, ?)",
         (measured_on, _now()),
+    )
+
+
+def exercise_names_fixed(conn: sqlite3.Connection, garmin_activity_id: str) -> bool:
+    """True if flow E has already confirmed this activity's names render."""
+    row = conn.execute(
+        "SELECT 1 FROM exercise_names_fixed WHERE garmin_activity_id = ?",
+        (str(garmin_activity_id),),
+    ).fetchone()
+    return row is not None
+
+
+def record_exercise_names_fixed(conn: sqlite3.Connection, garmin_activity_id: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO exercise_names_fixed (garmin_activity_id, fixed_at) "
+        "VALUES (?, ?)",
+        (str(garmin_activity_id), _now()),
     )
 
 

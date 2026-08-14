@@ -7,7 +7,7 @@ community reverse-engineering of Garmin Connect.
 
 ## What it does
 
-Four flows, run in order every 30 minutes:
+Five flows, run in order every 30 minutes:
 
 | Flow | Direction | Implementation |
 |------|-----------|----------------|
@@ -15,6 +15,7 @@ Four flows, run in order every 30 minutes:
 | C | Hevy routines to Garmin planned workouts | `hevy2garmin sync-routines` |
 | B | Garmin watch strength sessions to Hevy workouts | this repo (`gh_sync`) |
 | D | Garmin weigh-ins to Hevy body measurements | this repo (`gh_sync`) |
+| E | Makes flow A's pushed exercise names render | this repo (`gh_sync`) |
 
 Flow A is the important one for the usual pattern of starting a Strength
 activity on the watch for heart rate while logging the actual sets in Hevy on
@@ -39,12 +40,34 @@ three ways to combine them. This setup uses `merge`, set in
 
 | Strategy | Result |
 |----------|--------|
-| `merge` (in use) | Pushes sets, reps and weights into the watch activity and keeps every native metric: real heart rate, training effect, body battery. Garmin will not render exercise *names* on a device-recorded activity, so they show as "Unknown" even though the structured data is there. Nothing is deleted. |
+| `merge` (in use) | Pushes sets, reps and weights into the watch activity and keeps every native metric: real heart rate, training effect, body battery. Exercise names need flow E to render (see below). Nothing is deleted. |
 | `replace` (upstream default) | Uploads a fresh activity with proper exercise names, then deletes the watch recording. Heart rate is carried over, but the native training effect and body battery linkage are lost. |
 | `describe` | Leaves the watch activity untouched and writes the exercise list into its description. No structured sets reach Garmin. |
 
 `merge` was chosen because the reason to wear the watch during lifting is the
 heart rate and training load, and `replace` throws exactly that away.
+
+## Flow E: making the exercise names render
+
+Under `merge`, every set arrived in Garmin Connect as "Choose an Exercise" and
+the muscle map stayed blank, even though the API showed a correct category and
+name on every set (`SQUAT` / `PISTOL_SQUAT`, not `UNKNOWN`). The names were
+being stored and ignored.
+
+The cause is the `probability` field. Garmin's own rep detection records how
+confident it was that it identified a movement, and hevy2garmin writes exact
+names with `probability: 0.0`. Garmin Connect reads 0.0 as "nothing was
+identified" and falls back to the picker, discarding a perfectly good name
+sitting in the same record. Restating the identical sets with a real
+confidence makes the names, the volume column and the muscle map all appear.
+
+Flow E does that after each sync: any active set holding a usable category at
+zero confidence is rewritten at full confidence, and nothing else is touched.
+A named exercise with no confidence is the signature of a programmatic push,
+so anything the watch detected itself already carries a real score and is left
+alone. Repaired activities are recorded in `data/state.db` and not re-fetched.
+
+This belongs upstream in hevy2garmin's merge path; flow E is the local fix.
 
 ## Loop prevention
 
@@ -104,7 +127,7 @@ rather than an ongoing tax. Disabling 2FA would weaken the account permanently
 to save that one prompt.
 
 `hevy2garmin` reads the same `~/.garminconnect` store through its `garmin_auth`
-dependency, so one `gh-sync login` authenticates all four flows.
+dependency, so one `gh-sync login` authenticates all five flows.
 
 The unattended path deliberately refuses to attempt a fresh login: under
 systemd there is nobody to type a code, and an interactive prompt would hang
@@ -118,7 +141,7 @@ Garmin rate-limits its login endpoints and answers repeated attempts with a
 
 ```
 gh-sync doctor              verify both credentials, list devices and recent activities
-gh-sync sync                run all four flows
+gh-sync sync                run all five flows
 gh-sync sync --dry-run      report what would happen, write nothing
 gh-sync sync --flows b d    run only selected flows
 gh-sync status              show the ledger and the last run summary

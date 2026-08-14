@@ -1,10 +1,12 @@
-"""Orchestrator for all four sync flows.
+"""Orchestrator for all five sync flows.
 
 Flow order is load-bearing. A runs before B so that Hevy workouts reach Garmin
 first, merging into whatever the watch recorded. By the time B looks at Garmin
 activities, anything that came from Hevy already has a Hevy counterpart within
 the overlap window and is skipped. Running B first would import a watch session
 into Hevy that A was about to enrich, producing a duplicate.
+
+E runs last, because it repairs what A wrote and wants A's PUT to have landed.
 """
 
 from __future__ import annotations
@@ -27,7 +29,11 @@ from .config import (
     ensure_dirs,
     hevy2garmin_binary,
 )
-from .flows import flow_b_garmin_to_hevy, flow_d_body_measurements
+from .flows import (
+    flow_b_garmin_to_hevy,
+    flow_d_body_measurements,
+    flow_e_exercise_names,
+)
 from .garmin_client import connect
 from .hevy import HevyClient
 
@@ -89,7 +95,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     settings = Settings.from_env(dry_run=args.dry_run)
     ensure_dirs()
 
-    selected = set(args.flows) if args.flows else {"a", "b", "c", "d"}
+    selected = set(args.flows) if args.flows else {"a", "b", "c", "d", "e"}
     summary: dict[str, object] = {}
     failures = 0
 
@@ -100,7 +106,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         summary["c_routines_to_garmin"] = "ok" if flow_c(args.dry_run) else "failed"
         failures += summary["c_routines_to_garmin"] == "failed"
 
-    if selected & {"b", "d"}:
+    if selected & {"b", "d", "e"}:
         hevy = HevyClient(settings.hevy_api_key)
         garmin = connect(settings.garmin_email, settings.garmin_password)
         with state.connect() as conn:
@@ -112,6 +118,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
             if "d" in selected:
                 summary["d_body_measurements"] = flow_d_body_measurements(
                     garmin, hevy, conn, settings
+                )
+            # E runs last on purpose. It reads back what A wrote, and Garmin
+            # needs a moment before a PUT is visible to a GET; letting B and D
+            # do their several seconds of API work first buys that settling
+            # time without a bare sleep. If it still reads too early it simply
+            # records nothing and the next run picks the activity up.
+            if "e" in selected:
+                summary["e_exercise_names"] = flow_e_exercise_names(
+                    garmin, conn, settings
                 )
             state.finish_run(conn, run_id, json.dumps(summary, default=str))
 
@@ -132,6 +147,9 @@ def cmd_status(_: argparse.Namespace) -> int:
 
         measurements = conn.execute("SELECT COUNT(*) AS n FROM body_measurements").fetchone()
         print(f"\nFlow D body measurements synced: {measurements['n']}")
+
+        named = conn.execute("SELECT COUNT(*) AS n FROM exercise_names_fixed").fetchone()
+        print(f"Flow E activities with rendering exercise names: {named['n']}")
 
         last = conn.execute(
             "SELECT started_at, ended_at, summary FROM runs ORDER BY id DESC LIMIT 1"
@@ -284,10 +302,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_sync = sub.add_parser("sync", help="run the sync flows (default: all four)")
+    p_sync = sub.add_parser("sync", help="run the sync flows (default: all five)")
     p_sync.add_argument(
-        "--flows", nargs="+", choices=["a", "b", "c", "d"],
-        help="a=Hevy->Garmin  b=Garmin->Hevy  c=routines->Garmin  d=body measurements",
+        "--flows", nargs="+", choices=["a", "b", "c", "d", "e"],
+        help="a=Hevy->Garmin  b=Garmin->Hevy  c=routines->Garmin  "
+             "d=body measurements  e=make pushed exercise names render",
     )
     p_sync.add_argument("--dry-run", action="store_true", help="report without writing")
     p_sync.set_defaults(func=cmd_sync)

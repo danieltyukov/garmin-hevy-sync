@@ -1,7 +1,8 @@
-"""The two flows this repo owns.
+"""The three flows this repo owns.
 
 Flow B: Garmin watch-recorded strength sessions -> Hevy workouts.
 Flow D: Garmin weigh-ins -> Hevy body measurements.
+Flow E: repairs flow A's pushed exercise names so Garmin Connect renders them.
 
 Flows A (Hevy workouts -> Garmin activities) and C (Hevy routines -> Garmin
 planned workouts) are delegated to the hevy2garmin CLI; see :mod:`gh_sync.cli`.
@@ -9,6 +10,7 @@ planned workouts) are delegated to the hevy2garmin CLI; see :mod:`gh_sync.cli`.
 
 from __future__ import annotations
 
+import copy
 import logging
 import sqlite3
 import subprocess
@@ -227,6 +229,101 @@ def flow_b_garmin_to_hevy(
             hevy_starts.append(start)
 
     mapper.save()
+    return counters
+
+
+# Garmin's own rep detection stores how confident it is that it identified an
+# exercise. hevy2garmin pushes exact names but leaves that confidence at 0.0,
+# and Garmin Connect reads 0.0 as "nothing identified": the set renders as
+# "Choose an Exercise" and the muscle map stays blank even though a valid
+# category and name are sitting right there. Restating the names at full
+# confidence is what makes them show up. Verified live on activity 23964146255.
+NAMED_EXERCISE_CONFIDENCE = 100.0
+
+
+def _boost_named_exercises(sets: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    """Copy of ``sets`` with zero-confidence named exercises raised to full.
+
+    Only ``probability`` is ever written. A named exercise carrying no
+    confidence is the signature of a programmatic push, so anything the watch
+    detected itself (which always carries a real score) and anything without a
+    usable category are both left exactly as they are.
+    """
+    payload = copy.deepcopy(sets)
+    boosted = 0
+    for entry in payload.get("exerciseSets") or []:
+        if (entry.get("setType") or "").upper() != "ACTIVE":
+            continue
+        for exercise in entry.get("exercises") or []:
+            category = exercise.get("category")
+            if not category or category == "UNKNOWN":
+                continue
+            if exercise.get("probability") in (None, 0, 0.0):
+                exercise["probability"] = NAMED_EXERCISE_CONFIDENCE
+                boosted += 1
+    return payload, boosted
+
+
+def _has_named_exercise(sets: dict[str, Any]) -> bool:
+    """True if any active set carries a usable exercise identity."""
+    for entry in sets.get("exerciseSets") or []:
+        if (entry.get("setType") or "").upper() != "ACTIVE":
+            continue
+        for exercise in entry.get("exercises") or []:
+            category = exercise.get("category")
+            if category and category != "UNKNOWN":
+                return True
+    return False
+
+
+def flow_e_exercise_names(
+    garmin: Any, conn: sqlite3.Connection, settings: Settings
+) -> dict[str, int]:
+    """Make flow A's pushed exercise names actually render in Garmin Connect."""
+    counters = {"checked": 0, "fixed": 0, "failed": 0}
+
+    for activity in strength_activities(garmin, settings.lookback_days):
+        activity_id = str(activity.get("activityId"))
+        if state.exercise_names_fixed(conn, activity_id):
+            continue
+        counters["checked"] += 1
+
+        try:
+            sets = garmin.get_activity_exercise_sets(activity_id) or {}
+        except Exception as exc:  # noqa: BLE001 - per-activity network/API shape
+            logger.warning("Could not read exercise sets for %s: %s", activity_id, exc)
+            counters["failed"] += 1
+            continue
+
+        payload, boosted = _boost_named_exercises(sets)
+        if not boosted:
+            # Nothing to do. Only stop re-checking once names are actually
+            # present: an activity flow A has not enriched yet still has its
+            # names coming, and writing it off here would strand it forever.
+            if _has_named_exercise(sets):
+                state.record_exercise_names_fixed(conn, activity_id)
+            continue
+
+        if settings.dry_run:
+            logger.info(
+                "[dry-run] would restore %s exercise names on activity %s",
+                boosted, activity_id,
+            )
+            counters["fixed"] += 1
+            continue
+
+        try:
+            garmin.set_activity_exercise_sets(activity_id, payload)
+        except Exception as exc:  # noqa: BLE001
+            # Deliberately not recorded, so the next run retries.
+            logger.warning("Could not restore names on %s: %s", activity_id, exc)
+            counters["failed"] += 1
+            continue
+
+        state.record_exercise_names_fixed(conn, activity_id)
+        counters["fixed"] += 1
+        logger.info("Restored %s exercise names on activity %s", boosted, activity_id)
+
     return counters
 
 

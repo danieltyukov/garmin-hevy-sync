@@ -265,6 +265,224 @@ class TestFlowDBodyMeasurements:
         assert state.body_measurement_synced(conn, "2026-03-14")
 
 
+def _active_set(category, name, probability, **extra):
+    """One ACTIVE set shaped exactly like the live exerciseSets payload."""
+    one = {
+        "exercises": [{"category": category, "name": name, "probability": probability}],
+        "duration": 48.301,
+        "repetitionCount": 15,
+        "weight": 0.0,
+        "setType": "ACTIVE",
+        "startTime": "2026-08-13T15:17:21.0",
+        "wktStepIndex": 0,
+        "messageIndex": 0,
+    }
+    one.update(extra)
+    return one
+
+
+def _rest_set():
+    return {
+        "exercises": [],
+        "duration": 144.903,
+        "repetitionCount": None,
+        "weight": None,
+        "setType": "REST",
+        "startTime": "2026-08-13T15:18:09.0",
+        "wktStepIndex": 0,
+        "messageIndex": 1,
+    }
+
+
+def _activity(activity_id, type_key="strength_training"):
+    return {
+        "activityId": activity_id,
+        "activityType": {"typeKey": type_key},
+        "startTimeGMT": "2026-08-13 15:17:21",
+    }
+
+
+class FakeGarminGym:
+    def __init__(self, activities, sets_by_id):
+        self.activities = activities
+        self.sets_by_id = sets_by_id
+        self.puts = {}
+        self.reads = []
+        self.put_fails_for = set()
+
+    def get_activities_by_date(self, start, end):
+        return self.activities
+
+    def get_activity_exercise_sets(self, activity_id):
+        self.reads.append(str(activity_id))
+        import copy as _copy
+
+        return _copy.deepcopy(self.sets_by_id[str(activity_id)])
+
+    def set_activity_exercise_sets(self, activity_id, payload):
+        if str(activity_id) in self.put_fails_for:
+            raise RuntimeError("Garmin rejected the PUT")
+        self.puts[str(activity_id)] = payload
+        return {}
+
+
+def _probabilities(payload):
+    return [
+        e.get("probability")
+        for s in payload["exerciseSets"]
+        for e in (s.get("exercises") or [])
+    ]
+
+
+class TestFlowEExerciseNames:
+    """hevy2garmin pushes valid names with probability 0.0, which Garmin's UI
+    treats as "nothing identified" and renders as "Choose an Exercise"."""
+
+    def test_named_exercise_with_zero_probability_is_boosted(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [
+                _active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()]}},
+        )
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert counters["fixed"] == 1
+        assert _probabilities(garmin.puts["1"]) == [100.0]
+
+    def test_native_watch_detection_is_never_touched(self, conn):
+        """Garmin's own rep detection writes a real confidence; leave it be."""
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [
+                _active_set("SQUAT", "PISTOL_SQUAT", 87.5)]}},
+        )
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.puts == {}
+        assert counters["fixed"] == 0
+
+    def test_unknown_category_is_not_given_a_fake_confidence(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [
+                _active_set("UNKNOWN", None, 0.0)]}},
+        )
+        flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.puts == {}
+
+    def test_missing_category_is_not_given_a_fake_confidence(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [_active_set(None, None, 0.0)]}},
+        )
+        flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.puts == {}
+
+    def test_only_the_probability_field_changes(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        original = {"activityId": 1, "exerciseSets": [
+            _active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()]}
+        garmin = FakeGarminGym([_activity(1)], {"1": original})
+        flow_e_exercise_names(garmin, conn, _settings())
+
+        sent = garmin.puts["1"]
+        assert len(sent["exerciseSets"]) == 2
+        for before, after in zip(original["exerciseSets"], sent["exerciseSets"]):
+            assert {k: v for k, v in after.items() if k != "exercises"} == {
+                k: v for k, v in before.items() if k != "exercises"
+            }
+            for b_ex, a_ex in zip(before["exercises"], after["exercises"]):
+                assert a_ex["category"] == b_ex["category"]
+                assert a_ex["name"] == b_ex["name"]
+
+    def test_a_repaired_activity_is_not_fetched_again(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        sets = {"1": {"activityId": 1, "exerciseSets": [
+            _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}}
+        garmin = FakeGarminGym([_activity(1)], sets)
+        flow_e_exercise_names(garmin, conn, _settings())
+        sets["1"]["exerciseSets"][0]["exercises"][0]["probability"] = 100.0
+
+        garmin.reads.clear()
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.reads == []
+        assert counters["checked"] == 0
+
+    def test_an_already_correct_activity_is_recorded_so_it_stops_being_fetched(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [
+                _active_set("SQUAT", "PISTOL_SQUAT", 100.0)]}},
+        )
+        flow_e_exercise_names(garmin, conn, _settings())
+        garmin.reads.clear()
+        flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.reads == []
+
+    def test_an_activity_with_no_names_yet_is_checked_again_next_run(self, conn):
+        """Flow A may not have pushed its sets yet; do not write it off."""
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)], {"1": {"activityId": 1, "exerciseSets": [_rest_set()]}}
+        )
+        flow_e_exercise_names(garmin, conn, _settings())
+        garmin.reads.clear()
+        flow_e_exercise_names(garmin, conn, _settings())
+        assert garmin.reads == ["1"]
+
+    def test_a_failed_put_is_counted_and_retried_next_run(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1)],
+            {"1": {"activityId": 1, "exerciseSets": [
+                _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}},
+        )
+        garmin.put_fails_for = {"1"}
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert counters["failed"] == 1
+        assert counters["fixed"] == 0
+
+        garmin.put_fails_for = set()
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert counters["fixed"] == 1
+
+    def test_each_activity_is_handled_independently(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym(
+            [_activity(1), _activity(2)],
+            {
+                "1": {"activityId": 1, "exerciseSets": [
+                    _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]},
+                "2": {"activityId": 2, "exerciseSets": [
+                    _active_set("PUSH_UP", "PUSH_UP", 0.0)]},
+            },
+        )
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert counters["fixed"] == 2
+        assert set(garmin.puts) == {"1", "2"}
+
+    def test_non_strength_activities_are_ignored(self, conn):
+        from gh_sync.flows import flow_e_exercise_names
+
+        garmin = FakeGarminGym([_activity(1, "running")], {})
+        counters = flow_e_exercise_names(garmin, conn, _settings())
+        assert counters["checked"] == 0
+        assert garmin.puts == {}
+
+
 class TestWriteResponseParsing:
     """A write Hevy has already accepted must never raise on its reply body.
 
