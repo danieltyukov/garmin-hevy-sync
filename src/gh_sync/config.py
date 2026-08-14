@@ -47,6 +47,11 @@ class Settings:
     garmin_password: str
     # Flow B looks this many days back for watch-recorded strength sessions.
     lookback_days: int = 14
+    # Flow D gets its own, much longer window. Weigh-ins are sparse and
+    # irregular, so a fortnight sized for near-daily workouts silently drops
+    # any weigh-in older than that instead of merely deferring it: nothing
+    # ever widens the window again, so a missed entry is missed permanently.
+    body_lookback_days: int = 365
     # A Garmin activity starting within this many minutes of an existing Hevy
     # workout is assumed to be the same session, so flow B leaves it alone.
     overlap_minutes: int = 45
@@ -73,6 +78,7 @@ class Settings:
             garmin_email=os.environ["GARMIN_EMAIL"],
             garmin_password=os.environ["GARMIN_PASSWORD"],
             lookback_days=int(os.environ.get("GH_LOOKBACK_DAYS", "14")),
+            body_lookback_days=int(os.environ.get("GH_BODY_LOOKBACK_DAYS", "365")),
             overlap_minutes=int(os.environ.get("GH_OVERLAP_MINUTES", "45")),
             match_threshold=float(os.environ.get("GH_MATCH_THRESHOLD", "0.55")),
             dry_run=dry_run,

@@ -41,6 +41,19 @@ def extract_workout_id(response: Any) -> str | None:
     return None
 
 
+def _json_or_empty(response: requests.Response) -> dict[str, Any]:
+    """Body of an already-successful write, or {} when it carries no JSON.
+
+    Only ever call this once the status code has been checked. It exists so a
+    write that Hevy has already accepted is never turned into an exception by
+    the shape of its reply.
+    """
+    try:
+        return response.json()
+    except ValueError:  # requests raises a JSONDecodeError subclass of this
+        return {}
+
+
 class HevyClient:
     def __init__(self, api_key: str, timeout: int = 30) -> None:
         self.timeout = timeout
@@ -119,10 +132,22 @@ class HevyClient:
         resp = self._request("POST", "/v1/workouts", json={"workout": workout})
         if resp.status_code not in (200, 201):
             raise HevyError(f"POST /v1/workouts -> {resp.status_code}: {resp.text[:600]}")
-        return resp.json()
+        # Same hazard as create_body_measurement: the workout exists on Hevy by
+        # now, so an unreadable body must degrade to "created, id unknown"
+        # rather than blowing up the run. extract_workout_id returns None for
+        # {} and flow B already handles a missing id.
+        return _json_or_empty(resp)
 
     def create_body_measurement(self, measurement: dict[str, Any]) -> dict[str, Any] | None:
-        """Returns None when Hevy already has an entry for that date (409)."""
+        """Returns None when Hevy already has an entry for that date (409).
+
+        The live API answers a successful POST with an empty body, so the JSON
+        is parsed opportunistically. Letting the decode error escape would be
+        the worst outcome available: the measurement is already stored by the
+        time the body is read, so the caller would abort *after* the write and
+        never reach the ledger, orphaning the row and stalling the whole run.
+        An empty dict still reads as "created" against the None-means-409 test.
+        """
         resp = self._request("POST", "/v1/body_measurements", json=measurement)
         if resp.status_code == 409:
             return None
@@ -130,4 +155,4 @@ class HevyClient:
             raise HevyError(
                 f"POST /v1/body_measurements -> {resp.status_code}: {resp.text[:400]}"
             )
-        return resp.json()
+        return _json_or_empty(resp)

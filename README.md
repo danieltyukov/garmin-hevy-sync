@@ -187,6 +187,8 @@ opening a port. Worth revisiting if the delay ever actually bites.
 - Supersets recorded on the watch import as separate consecutive exercises
   rather than a linked Hevy superset. Order is preserved.
 - Deleting a workout on one side does not delete its counterpart.
+- Flow D is one-way. Garmin weigh-ins reach Hevy, but a weight logged only in
+  Hevy stays there, so Garmin is not a complete record of body weight.
 - The Venu 4 often auto-detects the movement but records `repetitionCount` as 0
   with no weight. Flow B keeps those sets and puts the recorded set durations
   in the exercise note, then flags the workout description with "Needs reps and

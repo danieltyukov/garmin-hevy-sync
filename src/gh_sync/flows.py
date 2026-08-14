@@ -234,17 +234,28 @@ def flow_d_body_measurements(
     garmin: Any, hevy: HevyClient, conn: sqlite3.Connection, settings: Settings
 ) -> dict[str, int]:
     """Copy Garmin weigh-ins into Hevy body measurements."""
-    counters = {"synced": 0, "skipped": 0, "failed": 0}
+    counters = {"synced": 0, "skipped": 0, "failed": 0, "no_date": 0, "considered": 0}
 
     try:
-        entries = body_composition(garmin, settings.lookback_days)
+        entries = body_composition(garmin, settings.body_lookback_days)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read Garmin body composition: %s", exc)
         return counters
 
+    logger.info(
+        "Garmin returned %s weigh-ins in the last %s days",
+        len(entries), settings.body_lookback_days,
+    )
+
     for entry in entries:
+        counters["considered"] += 1
         measured_on = entry.get("calendarDate")
         if not measured_on:
+            # Counted rather than dropped: without this the summary reports the
+            # same all-zero line whether Garmin had no weigh-ins at all or
+            # returned entries this code could not read.
+            logger.warning("Garmin weigh-in has no calendarDate, ignoring: %s", entry)
+            counters["no_date"] += 1
             continue
         if state.body_measurement_synced(conn, measured_on):
             counters["skipped"] += 1
@@ -281,6 +292,7 @@ def flow_d_body_measurements(
             logger.info("Hevy already had a measurement for %s", measured_on)
             counters["skipped"] += 1
         else:
+            logger.info("Synced body measurement %s to Hevy", measurement)
             counters["synced"] += 1
 
     return counters
