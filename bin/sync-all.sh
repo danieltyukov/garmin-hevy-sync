@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Entry point for the systemd timer. Runs all four flows and exits non-zero if
+# Entry point for the systemd timer. Runs all five flows and exits non-zero if
 # any of them failed, so `systemctl --user status` reflects reality.
 set -euo pipefail
 
