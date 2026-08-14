@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 
 from . import state
 from .config import (
@@ -38,7 +39,15 @@ def setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     fmt = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    handlers.append(logging.FileHandler(LOG_DIR / "sync.log"))
+    # Rotate rather than append forever: the unit runs every 30 minutes and
+    # writes ~25 lines a run, so a plain FileHandler grows without bound on a
+    # box nothing else prunes. Five 5 MB generations is roughly a year of
+    # history at that rate.
+    handlers.append(
+        RotatingFileHandler(
+            LOG_DIR / "sync.log", maxBytes=5 * 1024 * 1024, backupCount=5
+        )
+    )
     logging.basicConfig(level=level, format=fmt, handlers=handlers, force=True)
     # These are chatty at DEBUG and drown out our own lines.
     for noisy in ("urllib3", "garth", "requests"):
