@@ -184,3 +184,20 @@ class TestBackgroundFailuresLeaveATrace:
         monkeypatch.setattr(cli, "_interactive", lambda: True)
         assert cli.main(["sync"]) == 2
         assert notified == []
+
+
+@pytest.mark.parametrize(
+    ("line", "trouble"),
+    [
+        ("Sync run complete: 0 synced, 9 skipped, 0 failed, 0 deferred", False),
+        ("Routine sync done - created=0 updated=0 skipped=0 failed=0 scheduled=0", False),
+        ("Authenticated successfully", False),
+        ("Sync run complete: 0 synced, 8 skipped, 1 failed", True),
+        ("Upload failed for workout abc: HTTP 500", True),
+        ("Traceback (most recent call last):", True),
+    ],
+)
+def test_hevy2garmin_lines_are_only_warnings_when_something_went_wrong(line, trouble):
+    from gh_sync import h2g
+
+    assert h2g.is_trouble(line) is trouble

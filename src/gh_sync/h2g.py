@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from importlib import metadata
@@ -20,6 +21,13 @@ logger = logging.getLogger("gh_sync.hevy2garmin")
 # hevy2garmin reports progress on stderr. Logging all of it as WARNING made a
 # healthy run look alarming, so only lines that read like trouble keep that level.
 _TROUBLE = ("error", "fail", "traceback", "exception", "denied", "invalid", "429")
+# Summary counters such as "0 failed" or "failed=0" report the absence of trouble.
+_ZERO_COUNTS = re.compile(r"\b0 (?:failed|errors?)\b|\b(?:failed|errors?)[=:] ?0\b")
+
+
+def is_trouble(line: str) -> bool:
+    text = _ZERO_COUNTS.sub("", line.lower())
+    return any(word in text for word in _TROUBLE)
 
 
 class Hevy2GarminMissing(RuntimeError):
@@ -94,7 +102,7 @@ def run_logged(args: list[str], dry_run: bool = False) -> bool:
     for line in (result.stderr or "").splitlines():
         if not line.strip():
             continue
-        level = logging.WARNING if any(t in line.lower() for t in _TROUBLE) else logging.INFO
+        level = logging.WARNING if is_trouble(line) else logging.INFO
         logger.log(level, "%s", line.rstrip())
     if result.returncode != 0:
         logger.error("hevy2garmin %s exited with status %s", args[0], result.returncode)
