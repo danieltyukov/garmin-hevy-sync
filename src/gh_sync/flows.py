@@ -13,16 +13,21 @@ from __future__ import annotations
 import copy
 import logging
 import sqlite3
-import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from . import state
-from .config import HEVY2GARMIN_DB, Settings, hevy2garmin_binary
+from . import h2g, state
+from .config import Settings, hevy2garmin_db
 from .convert import build_hevy_workout
 from .exercise_map import ExerciseMapper
-from .garmin_client import exercise_sets, parse_start, strength_activities, body_composition
+from .garmin_client import (
+    activity_end,
+    body_composition,
+    exercise_sets,
+    parse_start,
+    strength_activities,
+)
 from .hevy import HevyClient, HevyError, extract_workout_id
 
 logger = logging.getLogger("gh_sync.flows")
@@ -36,25 +41,31 @@ def _parse_hevy_time(value: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
-def recent_hevy_starts(hevy: HevyClient, lookback_days: int) -> list[datetime]:
-    """Start times of Hevy workouts inside the window, for overlap detection.
+Session = tuple[datetime, datetime]
+
+
+def recent_hevy_sessions(
+    hevy: HevyClient, lookback_days: int, now: datetime | None = None
+) -> list[Session]:
+    """(start, end) of Hevy workouts inside the window, for overlap detection.
 
     Workouts come back newest-first, so the scan stops as soon as it walks past
     the window instead of paging through the entire history every run.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days + 1)
-    starts: list[datetime] = []
+    cutoff = (now or datetime.now(UTC)) - timedelta(days=lookback_days + 1)
+    sessions: list[Session] = []
     for workout in hevy.iter_workouts():
         start = _parse_hevy_time(workout.get("start_time"))
         if start is None:
             continue
         if start < cutoff:
             break
-        starts.append(start)
-    return starts
+        end = _parse_hevy_time(workout.get("end_time")) or start
+        sessions.append((start, max(start, end)))
+    return sessions
 
 
 def _overlaps(start: datetime, hevy_starts: list[datetime], minutes: int) -> bool:
@@ -62,7 +73,20 @@ def _overlaps(start: datetime, hevy_starts: list[datetime], minutes: int) -> boo
     return any(abs(start - other) <= window for other in hevy_starts)
 
 
-def claimed_garmin_activity_ids(db_path: Path = HEVY2GARMIN_DB) -> set[str]:
+def _same_session(start: datetime, end: datetime, sessions: list[Session], minutes: int) -> bool:
+    """True if a Hevy workout is the same gym session as this Garmin activity.
+
+    Either the two started within ``minutes`` of each other, or their time
+    ranges intersect at all. The second test catches a Hevy workout started
+    well into a session the watch had been recording for a while, which the
+    start-time window alone would treat as a different workout.
+    """
+    if _overlaps(start, [s for s, _ in sessions], minutes):
+        return True
+    return any(start <= h_end and h_start <= end for h_start, h_end in sessions)
+
+
+def claimed_garmin_activity_ids(db_path: Path | None = None) -> set[str]:
     """Garmin activities that flow A has already paired with a Hevy workout.
 
     The start-time overlap check alone is not enough. hevy2garmin matches within
@@ -75,6 +99,7 @@ def claimed_garmin_activity_ids(db_path: Path = HEVY2GARMIN_DB) -> set[str]:
     regardless of how far apart the two timestamps drift. Best-effort: a
     missing or unreadable database just means falling back to the time check.
     """
+    db_path = db_path or hevy2garmin_db()
     if not db_path.exists():
         return set()
     try:
@@ -92,49 +117,24 @@ def claimed_garmin_activity_ids(db_path: Path = HEVY2GARMIN_DB) -> set[str]:
     return {str(row[0]) for row in rows if row[0]}
 
 
-def _mark_synced_in_hevy2garmin(hevy_workout_id: str, garmin_activity_id: Any) -> None:
-    """Tell hevy2garmin this workout is already on Garmin, closing the loop.
-
-    Without this, flow A would see the workout flow B just created and push it
-    back to Garmin on the next run. Best-effort: a failure here is logged, and
-    hevy2garmin's own +/-30min matcher is the second line of defence.
-    """
-    binary = hevy2garmin_binary()
-    if not binary:
-        logger.warning("hevy2garmin not installed; cannot mark %s as synced", hevy_workout_id)
-        return
-    try:
-        subprocess.run(
-            [
-                binary, "mark-synced", str(hevy_workout_id),
-                "--garmin-id", str(garmin_activity_id),
-                "--reason", "created by gh-sync flow B from this Garmin activity",
-            ],
-            check=True, capture_output=True, timeout=120,
-        )
-        logger.info("Marked Hevy workout %s as already-synced in hevy2garmin", hevy_workout_id)
-    except subprocess.CalledProcessError as exc:
-        logger.warning(
-            "mark-synced failed for %s: %s", hevy_workout_id,
-            (exc.stderr or b"").decode(errors="replace")[:300],
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("mark-synced timed out for %s", hevy_workout_id)
-
-
 def flow_b_garmin_to_hevy(
-    garmin: Any, hevy: HevyClient, conn: sqlite3.Connection, settings: Settings
+    garmin: Any,
+    hevy: HevyClient,
+    conn: sqlite3.Connection,
+    settings: Settings,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Import watch-recorded strength sessions that Hevy does not already have."""
-    counters = {"imported": 0, "skipped": 0, "failed": 0, "considered": 0}
+    counters = {"imported": 0, "skipped": 0, "failed": 0, "deferred": 0, "considered": 0}
+    now = now or datetime.now(UTC)
 
     templates = list(hevy.iter_exercise_templates())
     logger.info("Loaded %s Hevy exercise templates", len(templates))
     template_types = {t["id"]: t.get("type", "") for t in templates if t.get("id")}
     mapper = ExerciseMapper(templates, threshold=settings.match_threshold)
 
-    hevy_starts = recent_hevy_starts(hevy, settings.lookback_days)
-    logger.info("Found %s Hevy workouts in the lookback window", len(hevy_starts))
+    hevy_sessions = recent_hevy_sessions(hevy, settings.lookback_days, now)
+    logger.info("Found %s Hevy workouts in the lookback window", len(hevy_sessions))
 
     claimed = claimed_garmin_activity_ids()
     logger.info("%s Garmin activities already paired by flow A", len(claimed))
@@ -148,7 +148,9 @@ def flow_b_garmin_to_hevy(
 
         if activity_id in claimed:
             state.record(
-                conn, activity_id, state.SKIPPED,
+                conn,
+                activity_id,
+                state.SKIPPED,
                 note="already paired with a Hevy workout by hevy2garmin",
             )
             counters["skipped"] += 1
@@ -160,17 +162,31 @@ def flow_b_garmin_to_hevy(
             counters["skipped"] += 1
             continue
 
-        if _overlaps(start, hevy_starts, settings.overlap_minutes):
+        end = activity_end(activity, start)
+        if _same_session(start, end, hevy_sessions, settings.overlap_minutes):
             state.record(
-                conn, activity_id, state.SKIPPED,
-                note=f"a Hevy workout already exists within {settings.overlap_minutes} min",
+                conn,
+                activity_id,
+                state.SKIPPED,
+                note="a Hevy workout already covers this session",
             )
             counters["skipped"] += 1
             continue
 
+        # Not recorded: a deferred session is simply looked at again next run.
+        ready_at = end + timedelta(minutes=settings.import_delay_minutes)
+        if now < ready_at:
+            logger.info(
+                "Activity %s ended recently; waiting until %s in case it is saved in Hevy",
+                activity_id,
+                ready_at.isoformat(timespec="minutes"),
+            )
+            counters["deferred"] += 1
+            continue
+
         try:
             sets = exercise_sets(garmin, activity_id)
-        except Exception as exc:  # noqa: BLE001 - network/API shape issues are per-activity
+        except Exception as exc:  # one bad activity must not stop the rest
             logger.warning("Could not read sets for activity %s: %s", activity_id, exc)
             state.record(conn, activity_id, state.FAILED, note=f"exercise set fetch: {exc}"[:300])
             counters["failed"] += 1
@@ -182,14 +198,21 @@ def flow_b_garmin_to_hevy(
             continue
 
         payload, unmapped = build_hevy_workout(
-            activity, sets, mapper, template_types=template_types, start=start
+            activity,
+            sets,
+            mapper,
+            template_types=template_types,
+            start=start,
+            private=settings.import_private,
         )
         if unmapped:
             logger.warning("Activity %s has unmapped exercises: %s", activity_id, unmapped)
 
         if payload is None:
             state.record(
-                conn, activity_id, state.SKIPPED,
+                conn,
+                activity_id,
+                state.SKIPPED,
                 note=f"no exercise mapped to a Hevy template ({', '.join(unmapped)})"[:300],
             )
             counters["skipped"] += 1
@@ -198,7 +221,9 @@ def flow_b_garmin_to_hevy(
         if settings.dry_run:
             logger.info(
                 "[dry-run] would create Hevy workout %r with %s exercises from activity %s",
-                payload["title"], len(payload["exercises"]), activity_id,
+                payload["title"],
+                len(payload["exercises"]),
+                activity_id,
             )
             counters["imported"] += 1
             continue
@@ -215,18 +240,22 @@ def flow_b_garmin_to_hevy(
         if hevy_id is None:
             logger.warning(
                 "Hevy accepted activity %s but returned no workout id; "
-                "the overlap check will prevent a re-import", activity_id,
+                "the overlap check will prevent a re-import",
+                activity_id,
             )
         state.record(
-            conn, activity_id, state.IMPORTED, hevy_workout_id=hevy_id,
+            conn,
+            activity_id,
+            state.IMPORTED,
+            hevy_workout_id=hevy_id,
             note=f"unmapped: {', '.join(unmapped)}" if unmapped else None,
         )
         counters["imported"] += 1
         logger.info("Imported Garmin activity %s as Hevy workout %s", activity_id, hevy_id)
 
         if hevy_id:
-            _mark_synced_in_hevy2garmin(hevy_id, activity_id)
-            hevy_starts.append(start)
+            h2g.mark_synced(hevy_id, activity_id)
+            hevy_sessions.append((start, end))
 
     mapper.save()
     return counters
@@ -290,7 +319,7 @@ def flow_e_exercise_names(
 
         try:
             sets = garmin.get_activity_exercise_sets(activity_id) or {}
-        except Exception as exc:  # noqa: BLE001 - per-activity network/API shape
+        except Exception as exc:
             logger.warning("Could not read exercise sets for %s: %s", activity_id, exc)
             counters["failed"] += 1
             continue
@@ -307,14 +336,15 @@ def flow_e_exercise_names(
         if settings.dry_run:
             logger.info(
                 "[dry-run] would restore %s exercise names on activity %s",
-                boosted, activity_id,
+                boosted,
+                activity_id,
             )
             counters["fixed"] += 1
             continue
 
         try:
             garmin.set_activity_exercise_sets(activity_id, payload)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Deliberately not recorded, so the next run retries.
             logger.warning("Could not restore names on %s: %s", activity_id, exc)
             counters["failed"] += 1
@@ -327,24 +357,45 @@ def flow_e_exercise_names(
     return counters
 
 
+def first_reading_per_day(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One weigh-in per calendar date: the earliest, by Garmin's timestamp.
+
+    Hevy keeps one body measurement per date and answers a second with 409,
+    so which reading wins used to depend on the order Garmin happened to list
+    them. The first of the day is the conventional one to track. Entries
+    without a date pass through so the caller can count them.
+    """
+    chosen: dict[str, dict[str, Any]] = {}
+    undated: list[dict[str, Any]] = []
+    for entry in entries:
+        day = entry.get("calendarDate")
+        if not day:
+            undated.append(entry)
+            continue
+        current = chosen.get(day)
+        stamp = entry.get("date") or entry.get("timestampGMT") or 0
+        if current is None or stamp < (current.get("date") or current.get("timestampGMT") or 0):
+            chosen[day] = entry
+    return [chosen[day] for day in sorted(chosen)] + undated
+
+
 def flow_d_body_measurements(
     garmin: Any, hevy: HevyClient, conn: sqlite3.Connection, settings: Settings
 ) -> dict[str, int]:
     """Copy Garmin weigh-ins into Hevy body measurements."""
     counters = {"synced": 0, "skipped": 0, "failed": 0, "no_date": 0, "considered": 0}
 
-    try:
-        entries = body_composition(garmin, settings.body_lookback_days)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not read Garmin body composition: %s", exc)
-        return counters
+    # A failure to read the list at all propagates: the run reports flow D as
+    # failed instead of an all-zero summary that looks like "no weigh-ins".
+    entries = body_composition(garmin, settings.body_lookback_days)
 
     logger.info(
         "Garmin returned %s weigh-ins in the last %s days",
-        len(entries), settings.body_lookback_days,
+        len(entries),
+        settings.body_lookback_days,
     )
 
-    for entry in entries:
+    for entry in first_reading_per_day(entries):
         counters["considered"] += 1
         measured_on = entry.get("calendarDate")
         if not measured_on:

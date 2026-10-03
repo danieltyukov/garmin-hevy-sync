@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      uv-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # hevy2garmin's PyPI package stops releasing after 2026-10-31 (its npm
+      # package replaces it). Flows A and C run its CLI, so moving past the
+      # pinned 0.12 line is a deliberate upgrade, not a bot bump.
+      - dependency-name: hevy2garmin
+        versions: ['>=0.13']
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

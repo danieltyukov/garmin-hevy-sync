@@ -1,0 +1,96 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem, do not open an issue. Report it privately
+        as described in SECURITY.md.
+
+        Before you paste anything, remove your Hevy API key, your Garmin email
+        address, anything from `~/.garminconnect` or `~/.hevy2garmin`, and the
+        contents of `config.env`, `profile.json` and `state.db`. Leave out Hevy
+        workout ids, and Garmin activity ids wherever they sit next to anything
+        personal.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `garmin-hevy-sync --version`.
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Installer script (install.sh or install.ps1)
+        - uv tool install
+        - Docker
+        - git clone
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part is affected
+      description: Flows A and C are carried out by hevy2garmin. Report them here anyway; they will be forwarded upstream if needed.
+      multiple: true
+      options:
+        - "Flow A: Hevy workouts to Garmin"
+        - "Flow C: Hevy routines to Garmin planned workouts"
+        - "Flow B: watch sessions to Hevy"
+        - "Flow D: weigh-ins to Hevy"
+        - "Flow E: exercise names in Garmin Connect"
+        - Setup or sign-in
+        - Background schedule
+        - Installer or Docker image
+        - Failure notifications
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: watch
+    attributes:
+      label: Watch model
+      description: Useful for anything involving workouts recorded on the watch.
+      placeholder: Venu 4
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `garmin-hevy-sync doctor`
+      description: Remove your email address and anything else that identifies you before pasting.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant lines of `garmin-hevy-sync logs -n 100`
+      description: Only the lines around the failure, redacted the same way.
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checks
+      options:
+        - label: I removed API keys, tokens, email addresses, body stats and workout or activity ids from this report.
+          required: true
+        - label: I ran `garmin-hevy-sync doctor` and checked the troubleshooting section of the README.

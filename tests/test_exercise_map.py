@@ -130,10 +130,19 @@ class TestResolve:
 
     def test_cached_entry_for_deleted_template_is_rescored(self, tmp_path):
         path = tmp_path / "map.json"
-        path.write_text(json.dumps({
-            "resolved": {"SQUAT/BARBELL_SQUAT": {
-                "hevy_id": "T_DELETED", "hevy_title": "Gone", "score": 0.9}}
-        }))
+        path.write_text(
+            json.dumps(
+                {
+                    "resolved": {
+                        "SQUAT/BARBELL_SQUAT": {
+                            "hevy_id": "T_DELETED",
+                            "hevy_title": "Gone",
+                            "score": 0.9,
+                        }
+                    }
+                }
+            )
+        )
         loaded = ExerciseMapper(TEMPLATES, map_file=path)
         match = loaded.resolve("SQUAT", "BARBELL_SQUAT")
         assert match is not None and match.hevy_id == "T_SQUAT_BB"

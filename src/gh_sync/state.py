@@ -1,19 +1,24 @@
-"""SQLite ledger for the flows this repo owns (B and D).
+"""SQLite ledger for the flows this repo owns (B, D and E).
 
-Flow A and C keep their own ledger inside ``~/.hevy2garmin/``; this database
-only tracks what we push *into* Hevy, so a crashed run retries instead of
-duplicating. Every write is idempotent on the Garmin-side id.
+Flows A and C keep their own ledger inside ``~/.hevy2garmin/``; this database
+only tracks what we push *into* Hevy and which Garmin activities flow E has
+repaired, so a crashed run retries instead of duplicating.
+
+The connection runs in autocommit mode on purpose. A ledger row describes a
+write that has already happened on a remote service; holding it in a
+transaction until the end of the run means a crash halfway through forgets
+workouts that already exist in Hevy, and the next run creates them again.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Iterator
 
-from .config import STATE_DB
+from .config import paths
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS garmin_to_hevy (
@@ -38,7 +43,13 @@ CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT NOT NULL,
     ended_at   TEXT,
-    summary    TEXT
+    summary    TEXT,
+    ok         INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 """
 
@@ -47,22 +58,33 @@ IMPORTED = "imported"  # created a Hevy workout from this Garmin activity
 SKIPPED = "skipped"  # deliberately not imported; note says why
 FAILED = "failed"  # attempted and errored; retried on the next run
 
+# Run history is only read for `status` and debugging. Two runs an hour adds up
+# to ~17,000 rows a year, so keep a quarter and drop the rest.
+RUN_HISTORY_DAYS = 90
+
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @contextmanager
-def connect(db_path: Path = STATE_DB) -> Iterator[sqlite3.Connection]:
+def connect(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
+    db_path = db_path or paths().state_db
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, isolation_level=None, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         yield conn
-        conn.commit()
     finally:
         conn.close()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+    if "ok" not in columns:  # added in 0.2
+        conn.execute("ALTER TABLE runs ADD COLUMN ok INTEGER")
 
 
 def already_handled(conn: sqlite3.Connection, garmin_activity_id: str) -> bool:
@@ -121,19 +143,46 @@ def exercise_names_fixed(conn: sqlite3.Connection, garmin_activity_id: str) -> b
 
 def record_exercise_names_fixed(conn: sqlite3.Connection, garmin_activity_id: str) -> None:
     conn.execute(
-        "INSERT OR REPLACE INTO exercise_names_fixed (garmin_activity_id, fixed_at) "
-        "VALUES (?, ?)",
+        "INSERT OR REPLACE INTO exercise_names_fixed (garmin_activity_id, fixed_at) VALUES (?, ?)",
         (str(garmin_activity_id), _now()),
     )
 
 
 def start_run(conn: sqlite3.Connection) -> int:
     cur = conn.execute("INSERT INTO runs (started_at) VALUES (?)", (_now(),))
-    return int(cur.lastrowid)
+    return int(cur.lastrowid or 0)
 
 
-def finish_run(conn: sqlite3.Connection, run_id: int, summary: str) -> None:
+def finish_run(conn: sqlite3.Connection, run_id: int, summary: str, ok: bool = True) -> None:
     conn.execute(
-        "UPDATE runs SET ended_at = ?, summary = ? WHERE id = ?",
-        (_now(), summary, run_id),
+        "UPDATE runs SET ended_at = ?, summary = ?, ok = ? WHERE id = ?",
+        (_now(), summary, int(ok), run_id),
     )
+
+
+def prune_runs(conn: sqlite3.Connection, keep_days: int = RUN_HISTORY_DAYS) -> int:
+    cutoff = (datetime.now(UTC) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute("DELETE FROM runs WHERE started_at < ?", (cutoff,))
+    return cur.rowcount
+
+
+def last_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT started_at, ended_at, summary, ok FROM runs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str | None) -> None:
+    if value is None:
+        conn.execute("DELETE FROM meta WHERE key = ?", (key,))
+    else:
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )

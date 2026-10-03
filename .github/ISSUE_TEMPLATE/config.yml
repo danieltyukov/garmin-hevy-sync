@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/danieltyukov/garmin-hevy-sync#troubleshooting
+    about: Check the troubleshooting section of the README before opening a bug report.
+  - name: Security report
+    url: https://github.com/danieltyukov/garmin-hevy-sync/security/advisories/new
+    about: Report a vulnerability privately instead of opening an issue.
+  - name: Questions and ideas
+    url: https://github.com/danieltyukov/garmin-hevy-sync/discussions
+    about: Usage questions, setup help and ideas that are not a concrete request yet.

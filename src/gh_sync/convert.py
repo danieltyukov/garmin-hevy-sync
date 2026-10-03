@@ -6,8 +6,9 @@ directly. Everything that talks to an API lives in :mod:`gh_sync.flows`.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from .exercise_map import ExerciseMapper, garmin_key
 
@@ -37,7 +38,9 @@ def _primary_exercise(garmin_set: dict[str, Any]) -> tuple[str | None, str | Non
     return best.get("category"), best.get("name")
 
 
-def group_consecutive(sets: Iterable[dict[str, Any]]) -> list[tuple[tuple[str | None, str | None], list[dict]]]:
+def group_consecutive(
+    sets: Iterable[dict[str, Any]],
+) -> list[tuple[tuple[str | None, str | None], list[dict]]]:
     """Collapse a flat set list into consecutive runs of the same exercise.
 
     Runs rather than a global group-by: an A/B/A/B superset stays in recorded
@@ -70,26 +73,18 @@ def _build_set(garmin_set: dict[str, Any], template_type: str | None) -> dict[st
         payload["weight_kg"] = round(grams / 1000.0, 2)
 
     duration = garmin_set.get("duration")
-    if (
-        isinstance(duration, (int, float))
-        and duration > 0
-        and template_type in DURATION_TYPES
-    ):
-        payload["duration_seconds"] = int(round(duration))
+    if isinstance(duration, (int, float)) and duration > 0 and template_type in DURATION_TYPES:
+        payload["duration_seconds"] = round(duration)
 
     distance = garmin_set.get("distance")
-    if (
-        isinstance(distance, (int, float))
-        and distance > 0
-        and template_type in DISTANCE_TYPES
-    ):
-        payload["distance_meters"] = int(round(distance))
+    if isinstance(distance, (int, float)) and distance > 0 and template_type in DISTANCE_TYPES:
+        payload["distance_meters"] = round(distance)
 
     return payload
 
 
 def _iso_z(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 _METRIC_FIELDS = ("reps", "weight_kg", "duration_seconds", "distance_meters")
@@ -109,7 +104,7 @@ def _blank_set_note(group: list[dict[str, Any]]) -> str:
     template has nowhere to put them, so they go in the exercise note instead.
     """
     durations = [
-        int(round(item["duration"]))
+        round(item["duration"])
         for item in group
         if isinstance(item.get("duration"), (int, float)) and item["duration"] > 0
     ]
@@ -125,6 +120,7 @@ def build_hevy_workout(
     mapper: ExerciseMapper,
     template_types: dict[str, str] | None = None,
     start: datetime | None = None,
+    private: bool = False,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Turn one Garmin strength activity into a Hevy workout payload.
 
@@ -168,7 +164,7 @@ def build_hevy_workout(
     activity_id = activity.get("activityId")
     duration_seconds = activity.get("duration") or activity.get("elapsedDuration") or 0
     if start is None:
-        start = datetime.now(timezone.utc)
+        start = datetime.now(UTC)
     end = start + timedelta(seconds=float(duration_seconds or 0))
 
     description = f"{SOURCE_MARKER} {activity_id}."
@@ -182,7 +178,7 @@ def build_hevy_workout(
         "description": description,
         "start_time": _iso_z(start),
         "end_time": _iso_z(end),
-        "is_private": False,
+        "is_private": private,
         "exercises": exercises,
     }
     return workout, unmapped

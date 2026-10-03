@@ -1,0 +1,20 @@
+# First run, once:   docker compose run --rm garmin-hevy-sync setup
+# Then:              docker compose up -d
+# Logs:              docker compose logs -f
+# Status:            docker compose exec garmin-hevy-sync garmin-hevy-sync status
+services:
+  garmin-hevy-sync:
+    build: .
+    image: garmin-hevy-sync:local
+    restart: unless-stopped
+    command: ["sync", "--every", "30m"]
+    environment:
+      # Local timestamps in the log, e.g. Europe/Amsterdam.
+      TZ: ${TZ:-UTC}
+      # Optional: push failures to an ntfy topic or any plain-text webhook.
+      GH_NOTIFY_URL: ${GH_NOTIFY_URL:-}
+    volumes:
+      - data:/data
+
+volumes:
+  data:

@@ -1,0 +1,86 @@
+name: Exercise mapping problem
+description: A Garmin exercise matched the wrong Hevy exercise, or did not match at all.
+labels: [exercise-mapping]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for flow B, which imports sessions recorded on the
+        watch into Hevy and picks a Hevy exercise for each Garmin one. Two
+        related problems belong elsewhere:
+
+        - A Hevy exercise that shows up under the wrong name in Garmin Connect
+          comes from hevy2garmin's mapping in flow A. Report it at
+          https://github.com/drkostas/hevy2garmin/issues.
+        - Sets that show as "Choose an Exercise" in Garmin Connect are flow E.
+          Use the bug report.
+
+        You can fix the match on your own machine straight away: add an entry
+        under `overrides` in `exercise_map.json` in the tool's home folder,
+        mapping the Garmin key to the Hevy exercise template id. Please still
+        report it so the matcher improves for everyone.
+  - type: input
+    id: garmin_key
+    attributes:
+      label: Garmin exercise key
+      description: Exactly as `garmin-hevy-sync unmapped` prints it, or as the key appears in `exercise_map.json`.
+      placeholder: BENCH_PRESS/BARBELL_BENCH_PRESS
+    validations:
+      required: true
+  - type: input
+    id: matched
+    attributes:
+      label: What it matched
+      description: The Hevy exercise title it was given, or "nothing" if it is listed as unmapped. Include the score if one is shown.
+      placeholder: Bench Press (Cable)
+    validations:
+      required: true
+  - type: input
+    id: expected
+    attributes:
+      label: What it should match
+      description: The Hevy exercise title as the Hevy app shows it.
+      placeholder: Bench Press (Barbell)
+    validations:
+      required: true
+  - type: dropdown
+    id: hevy_kind
+    attributes:
+      label: Is that Hevy exercise built in or one you created?
+      options:
+        - Built into Hevy
+        - A custom exercise I created
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: override
+    attributes:
+      label: Did an override fix it?
+      description: An entry under `overrides` in `exercise_map.json`.
+      options:
+        - Yes, the override gives the right exercise
+        - No, the override had no effect
+        - I did not try one
+    validations:
+      required: true
+  - type: input
+    id: watch
+    attributes:
+      label: Watch model
+      placeholder: Venu 4
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `garmin-hevy-sync --version`.
+      placeholder: 0.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What the exercise is if the Garmin name is unclear, and whether you picked it from the list on the watch or the watch detected it.
