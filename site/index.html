@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>garmin-hevy-sync: two-way sync between a Garmin watch and Hevy</title>
+  <meta name="description" content="Two-way sync between a Garmin watch and the Hevy workout app. Hevy sets are merged into the activity your watch recorded, watch-only sessions and weigh-ins reach Hevy, and it runs in the background on Linux, macOS, Windows or Docker.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F6F7F4" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#131816" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://danieltyukov.github.io/garmin-hevy-sync/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="garmin-hevy-sync">
+  <meta property="og:title" content="garmin-hevy-sync">
+  <meta property="og:description" content="Garmin heart rate and Hevy sets in one workout. Two-way sync that runs in the background on Linux, macOS, Windows or Docker.">
+  <meta property="og:url" content="https://danieltyukov.github.io/garmin-hevy-sync/">
+  <meta property="og:image" content="https://danieltyukov.github.io/garmin-hevy-sync/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The garmin-hevy-sync mark next to the line: Garmin heart rate and Hevy sets in one workout.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="garmin-hevy-sync">
+  <meta name="twitter:description" content="Garmin heart rate and Hevy sets in one workout. Two-way sync that runs in the background on Linux, macOS, Windows or Docker.">
+  <meta name="twitter:image" content="https://danieltyukov.github.io/garmin-hevy-sync/og.png">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&amp;display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="wrap">
+    <header class="top">
+      <a class="brand" href="./" aria-label="garmin-hevy-sync home">
+        <svg class="mark" viewBox="0 0 64 64" width="30" height="30" aria-hidden="true" focusable="false">
+          <path class="mark-g" d="M49.05 8.54A29 29 0 0 1 17.50 57.11L14.61 44.64L25.00 44.12A14 14 0 0 0 40.23 20.67L50.62 21.25Z"/>
+          <path class="mark-h" d="M14.95 55.46A29 29 0 0 1 46.50 6.89L49.39 19.36L39.00 19.88A14 14 0 0 0 23.77 43.33L13.38 42.75Z"/>
+          <circle class="mark-k" cx="32" cy="32" r="5.5"/>
+        </svg>
+        <span>garmin-hevy-sync</span>
+      </a>
+      <nav class="links" aria-label="Project">
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync">GitHub</a>
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync/tree/main/docs">Docs</a>
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync/releases">Releases</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <div class="hero">
+        <h1>Garmin heart rate and Hevy sets in one workout.</h1>
+        <p class="lead">garmin-hevy-sync copies workouts, routines and weigh-ins between a Garmin watch and Hevy, in both directions. It runs in the background on your own computer every 30 minutes, on Linux, macOS, Windows or Docker.</p>
+
+        <div class="install">
+          <input type="radio" name="install" id="t-unix" checked>
+          <input type="radio" name="install" id="t-win">
+          <input type="radio" name="install" id="t-docker">
+          <input type="radio" name="install" id="t-uv">
+          <div class="tabs">
+            <label for="t-unix">macOS / Linux</label>
+            <label for="t-win">Windows</label>
+            <label for="t-docker">Docker</label>
+            <label for="t-uv">uv</label>
+          </div>
+          <div class="panel p-unix">
+            <pre><code>curl -LsSf https://danieltyukov.github.io/garmin-hevy-sync/install.sh | sh</code></pre>
+            <button class="copy" type="button">Copy</button>
+            <p class="panel-note">Installs uv if it is missing (uv brings its own Python 3.12), installs the tool, then starts the setup wizard. You can <a href="install.sh">read install.sh</a> first.</p>
+          </div>
+          <div class="panel p-win">
+            <pre><code>powershell -ExecutionPolicy ByPass -c "irm https://danieltyukov.github.io/garmin-hevy-sync/install.ps1 | iex"</code></pre>
+            <button class="copy" type="button">Copy</button>
+            <p class="panel-note">Run it in PowerShell. Installs uv if it is missing, installs the tool, then starts the setup wizard. You can <a href="install.ps1">read install.ps1</a> first.</p>
+          </div>
+          <div class="panel p-docker">
+            <pre><code>git clone https://github.com/danieltyukov/garmin-hevy-sync &amp;&amp; cd garmin-hevy-sync &amp;&amp; docker compose run --rm garmin-hevy-sync setup &amp;&amp; docker compose up -d</code></pre>
+            <button class="copy" type="button">Copy</button>
+            <p class="panel-note">Runs setup once in a temporary container, then starts a container that keeps syncing.</p>
+          </div>
+          <div class="panel p-uv">
+            <pre><code>uv tool install git+https://github.com/danieltyukov/garmin-hevy-sync &amp;&amp; garmin-hevy-sync setup</code></pre>
+            <button class="copy" type="button">Copy</button>
+            <p class="panel-note">For machines that already have <a href="https://docs.astral.sh/uv/">uv</a>.</p>
+          </div>
+        </div>
+        <p class="note">Needs Hevy Pro and a Garmin watch that records Strength activities. Version 0.2.0, MIT license.</p>
+        <p class="visually-hidden" aria-live="polite" id="copy-status"></p>
+      </div>
+
+      <section id="problem" aria-labelledby="problem-title">
+        <h2 id="problem-title">Half a workout in each app</h2>
+        <p>You start a Strength activity on the watch to get real heart rate and training load. Then you log the actual sets in Hevy on your phone, because typing reps on a watch is slow. Garmin and Hevy have no official integration, so each app ends up holding half of the session.</p>
+        <div class="split">
+          <div>
+            <h3>Recorded by the watch</h3>
+            <ul>
+              <li>Heart rate</li>
+              <li>Training load and training effect</li>
+              <li>Calories and set timing</li>
+              <li>Weigh-ins</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Logged in Hevy</h3>
+            <ul>
+              <li>Exercise names</li>
+              <li>Reps and weights</li>
+              <li>Routines</li>
+              <li>Body measurements</li>
+            </ul>
+          </div>
+        </div>
+        <p>After a sync, the Garmin activity holds the Hevy sets next to the heart rate the watch recorded. Sessions you only recorded on the watch show up in Hevy, and so do your Garmin weigh-ins.</p>
+      </section>
+
+      <section id="how" aria-labelledby="how-title">
+        <h2 id="how-title">Five flows, every 30 minutes</h2>
+        <p>Each run goes through five flows in a fixed order. A and C use <a href="https://github.com/drkostas/hevy2garmin">hevy2garmin</a>, a community project. B, D and E are part of this project.</p>
+
+        <figure class="flowmap">
+          <svg class="fm-wide" viewBox="0 0 760 392" role="img" aria-labelledby="fmw-title fmw-desc">
+            <title id="fmw-title">The five flows between Hevy and Garmin Connect</title>
+            <desc id="fmw-desc">Flow A sends Hevy workouts to Garmin strength activities, merged into the watch recording. Flow B sends watch-only strength activities back to Hevy workouts. Flow C sends Hevy routines to Garmin planned workouts. Flow D sends Garmin weigh-ins to Hevy body measurements. Flow E repairs exercise names on Garmin strength activities.</desc>
+            <text class="fm-col" x="0" y="18">Hevy</text>
+            <text class="fm-col" x="560" y="18">Garmin Connect</text>
+
+            <rect class="fm-box" x="0.75" y="34" width="199" height="120" rx="7"/>
+            <rect class="fm-box" x="560.25" y="34" width="199" height="120" rx="7"/>
+            <text class="fm-label" x="18" y="99">Workouts</text>
+            <text class="fm-label" x="578" y="99">Strength activities</text>
+            <rect class="fm-box" x="0.75" y="240" width="199" height="64" rx="7"/>
+            <rect class="fm-box" x="560.25" y="240" width="199" height="64" rx="7"/>
+            <text class="fm-label" x="18" y="277">Routines</text>
+            <text class="fm-label" x="578" y="277">Planned workouts</text>
+            <rect class="fm-box" x="0.75" y="326" width="199" height="64" rx="7"/>
+            <rect class="fm-box" x="560.25" y="326" width="199" height="64" rx="7"/>
+            <text class="fm-label" x="18" y="363">Body measurements</text>
+            <text class="fm-label" x="578" y="363">Weigh-ins</text>
+
+            <g class="fm-to-garmin">
+              <line x1="201" y1="74" x2="548" y2="74"/>
+              <polygon points="559,74 547,68 547,80"/>
+              <line x1="201" y1="272" x2="548" y2="272"/>
+              <polygon points="559,272 547,266 547,278"/>
+              <path d="M730 155 C730 214 610 214 610 167"/>
+              <polygon points="610,156 604,168 616,168"/>
+            </g>
+            <g class="fm-to-hevy">
+              <line x1="559" y1="124" x2="212" y2="124"/>
+              <polygon points="201,124 213,118 213,130"/>
+              <line x1="559" y1="358" x2="212" y2="358"/>
+              <polygon points="201,358 213,352 213,364"/>
+            </g>
+
+            <text class="fm-note" x="380" y="54">Sets merged into the watch recording</text>
+            <text class="fm-note" x="380" y="104">Watch-only sessions</text>
+            <text class="fm-note fm-end" x="600" y="205">Exercise names repaired</text>
+            <text class="fm-note" x="380" y="252">Routines to follow on the watch</text>
+            <text class="fm-note" x="380" y="338">Weight entries from the past year</text>
+
+            <g class="fm-key fm-to-garmin"><circle cx="380" cy="74" r="11"/><text x="380" y="78.6">A</text></g>
+            <g class="fm-key fm-to-hevy"><circle cx="380" cy="124" r="11"/><text x="380" y="128.6">B</text></g>
+            <g class="fm-key fm-to-garmin"><circle cx="380" cy="272" r="11"/><text x="380" y="276.6">C</text></g>
+            <g class="fm-key fm-to-hevy"><circle cx="380" cy="358" r="11"/><text x="380" y="362.6">D</text></g>
+            <g class="fm-key fm-to-garmin"><circle cx="670" cy="200" r="11"/><text x="670" y="204.6">E</text></g>
+          </svg>
+
+          <svg class="fm-narrow" viewBox="0 0 420 318" role="img" aria-labelledby="fmn-title fmn-desc">
+            <title id="fmn-title">The five flows between Hevy and Garmin Connect</title>
+            <desc id="fmn-desc">Flow A sends Hevy workouts to Garmin strength activities, merged into the watch recording. Flow B sends watch-only strength activities back to Hevy workouts. Flow C sends Hevy routines to Garmin planned workouts. Flow D sends Garmin weigh-ins to Hevy body measurements. Flow E repairs exercise names on Garmin strength activities.</desc>
+            <text class="fm-col" x="0" y="16">Hevy</text>
+            <text class="fm-col" x="246" y="16">Garmin Connect</text>
+
+            <rect class="fm-box" x="0.75" y="30" width="173" height="80" rx="6"/>
+            <rect class="fm-box" x="246.25" y="30" width="173" height="80" rx="6"/>
+            <text class="fm-label" x="14" y="76">Workouts</text>
+            <text class="fm-label" x="260" y="76">Strength activities</text>
+            <rect class="fm-box" x="0.75" y="178" width="173" height="52" rx="6"/>
+            <rect class="fm-box" x="246.25" y="178" width="173" height="52" rx="6"/>
+            <text class="fm-label" x="14" y="210">Routines</text>
+            <text class="fm-label" x="260" y="210">Planned workouts</text>
+            <rect class="fm-box" x="0.75" y="262" width="173" height="52" rx="6"/>
+            <rect class="fm-box" x="246.25" y="262" width="173" height="52" rx="6"/>
+            <text class="fm-label" x="14" y="294">Body measurements</text>
+            <text class="fm-label" x="260" y="294">Weigh-ins</text>
+
+            <g class="fm-to-garmin">
+              <line x1="175" y1="56" x2="235" y2="56"/>
+              <polygon points="245,56 234,50.5 234,61.5"/>
+              <line x1="175" y1="204" x2="235" y2="204"/>
+              <polygon points="245,204 234,198.5 234,209.5"/>
+              <path d="M392 111 C392 156 296 156 296 122"/>
+              <polygon points="296,111.5 290.5,122.5 301.5,122.5"/>
+            </g>
+            <g class="fm-to-hevy">
+              <line x1="245" y1="86" x2="185" y2="86"/>
+              <polygon points="175,86 186,80.5 186,91.5"/>
+              <line x1="245" y1="288" x2="185" y2="288"/>
+              <polygon points="175,288 186,282.5 186,293.5"/>
+            </g>
+
+            <g class="fm-key fm-to-garmin"><circle cx="210" cy="56" r="11"/><text x="210" y="60.6">A</text></g>
+            <g class="fm-key fm-to-hevy"><circle cx="210" cy="86" r="11"/><text x="210" y="90.6">B</text></g>
+            <g class="fm-key fm-to-garmin"><circle cx="210" cy="204" r="11"/><text x="210" y="208.6">C</text></g>
+            <g class="fm-key fm-to-hevy"><circle cx="210" cy="288" r="11"/><text x="210" y="292.6">D</text></g>
+            <g class="fm-key fm-to-garmin"><circle cx="344" cy="145" r="11"/><text x="344" y="149.6">E</text></g>
+          </svg>
+          <figcaption>Green arrows write to Garmin. Amber arrows write to Hevy.</figcaption>
+        </figure>
+
+        <ol class="flows" aria-label="Flows in the order they run">
+          <li class="to-garmin"><span class="key">A</span><div><b>Hevy workouts to Garmin activities.</b> When the watch recorded the same session, the sets, reps and weights are merged into that recording. Garmin keeps the real heart rate and calories and does not gain a second, empty activity.</div></li>
+          <li class="to-garmin"><span class="key">C</span><div><b>Hevy routines to Garmin planned workouts</b>, so you can follow them on the watch.</div></li>
+          <li class="to-hevy"><span class="key">B</span><div><b>Watch-only sessions to Hevy workouts.</b> For strength sessions with no Hevy log to merge into. Garmin exercise names are matched to Hevy exercises, and anything without a confident match is named in the workout description instead of being dropped.</div></li>
+          <li class="to-hevy"><span class="key">D</span><div><b>Garmin weigh-ins to Hevy body measurements.</b> It looks back a year, because weigh-ins are irregular.</div></li>
+          <li class="to-garmin"><span class="key">E</span><div><b>Exercise name repair.</b> Fixes sets that show as &ldquo;Choose an Exercise&rdquo; in Garmin Connect. <a href="#names">How that works</a>.</div></li>
+        </ol>
+
+        <h3>Why the order matters</h3>
+        <p>A runs before B. By the time B looks at Garmin, a session that started in Hevy already has its Hevy counterpart, so B skips it and nothing is imported twice. E runs last because it reads back what A wrote.</p>
+
+        <h3>Loop prevention</h3>
+        <p>A two-way sync without guards would copy the same workout back and forth. Four checks stop that:</p>
+        <dl class="guards">
+          <div><dt>Pairing ledger</dt><dd>B skips any Garmin activity that hevy2garmin has already paired with a Hevy workout, including sessions logged in Hevy hours later on the same day.</dd></div>
+          <div><dt>Overlap window</dt><dd>B skips any Garmin activity that starts within 45 minutes of an existing Hevy workout, or overlaps one in time. It also waits three hours after a session ends before importing it. This covers the gap before A records its pairing.</dd></div>
+          <div><dt>Cross-marking</dt><dd>When B creates a Hevy workout, it writes the pairing into hevy2garmin's ledger, so A never pushes it back to Garmin.</dd></div>
+          <div><dt>Local ledger</dt><dd>Every activity B has imported or skipped is recorded. Only failures are retried.</dd></div>
+        </dl>
+      </section>
+
+      <section id="names" aria-labelledby="names-title">
+        <h2 id="names-title">Exercise names that show up in Garmin</h2>
+        <p>Merging Hevy sets into a watch recording used to leave every set reading &ldquo;Choose an Exercise&rdquo;, with a blank muscle map. The names were stored correctly. Garmin Connect ignored them because each set said it had been identified with zero confidence.</p>
+
+        <figure class="compare">
+          <input type="radio" name="compare" id="c-before" checked>
+          <input type="radio" name="compare" id="c-after">
+          <div class="tabs">
+            <label for="c-before">Before</label>
+            <label for="c-after">After flow E</label>
+          </div>
+          <div class="shots">
+            <picture class="shot-before">
+              <source media="(max-width: 560px)" srcset="assets/before-choose-an-exercise-narrow.webp" width="360" height="401">
+              <img src="assets/before-choose-an-exercise.webp" width="660" height="401" alt="Garmin Connect set table for a merged strength activity. All eight sets show the placeholder Choose an Exercise.">
+            </picture>
+            <picture class="shot-after">
+              <source media="(max-width: 560px)" srcset="assets/after-named-exercises-narrow.webp" width="360" height="402">
+              <img src="assets/after-named-exercises.webp" width="700" height="402" alt="The same eight sets after flow E: five sets of Pistol Squat and three sets of Lunge.">
+            </picture>
+          </div>
+          <figcaption>The same eight sets in Garmin Connect, before and after the repair.</figcaption>
+        </figure>
+
+        <div class="cause">
+          <div>
+            <p>Garmin's rep counting stores how sure it was about each movement. Sets pushed in from outside carried a value of 0.0, which Garmin Connect reads as &ldquo;nothing identified&rdquo;, even when the name next to it is correct:</p>
+<pre class="code"><code>{
+  "category": "SQUAT",
+  "name": "PISTOL_SQUAT",
+  <mark>"probability": 0.0</mark>
+}</code></pre>
+            <p>Flow E restates the same sets at full confidence and changes nothing else. It only touches active sets that have a real category at zero confidence, so sets the watch detected itself are left alone. hevy2garmin 0.12 now does this for new merges. Flow E repairs activities merged before that.</p>
+          </div>
+          <figure class="muscles">
+            <img src="assets/muscle-map.webp" width="510" height="432" alt="Garmin Connect muscle map, front and back views, with quadriceps, glutes and calves marked as primary muscles and hamstrings as secondary.">
+            <figcaption>Once the names resolve, the muscle map fills in too.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section id="background" aria-labelledby="background-title">
+        <h2 id="background-title">Runs in the background</h2>
+        <p>The installer ends by starting <code>garmin-hevy-sync setup</code>, which asks for what it needs and then turns on the schedule:</p>
+        <ol class="steps">
+          <li><b>Hevy API key.</b> Copy it from <a href="https://hevy.com/settings?developer">hevy.com/settings?developer</a>. The API needs Hevy Pro.</li>
+          <li><b>Garmin sign-in.</b> Your email, password and the code Garmin emails you, once. The password is not stored, only tokens that refresh themselves.</li>
+          <li><b>Body stats.</b> Optional. They make the calorie estimates more accurate.</li>
+          <li><b>Schedule.</b> Setup turns on the background run, every 30 minutes from then on.</li>
+        </ol>
+
+        <table class="systems">
+          <caption class="visually-hidden">How the schedule runs on each system</caption>
+          <thead><tr><th scope="col">System</th><th scope="col">How it runs</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Linux</th><td>A systemd user timer, or cron where systemd is not available</td></tr>
+            <tr><th scope="row">macOS</th><td>A launchd agent</td></tr>
+            <tr><th scope="row">Windows</th><td>A Task Scheduler task that runs without opening a window</td></tr>
+            <tr><th scope="row">Docker</th><td>The container repeats the sync on its own</td></tr>
+          </tbody>
+        </table>
+        <p>Runs missed while the computer was asleep or off are caught up. To change the schedule yourself, use <code>garmin-hevy-sync schedule install</code>, <code>remove</code> or <code>status</code>.</p>
+
+        <h3>Commands</h3>
+        <p><code>gh-sync</code> is a shorter alias for <code>garmin-hevy-sync</code>.</p>
+        <dl class="commands">
+          <div><dt><code>setup</code></dt><dd>Run the setup wizard again.</dd></div>
+          <div><dt><code>login</code></dt><dd>Sign in to Garmin again, for example after the sign-in expired.</dd></div>
+          <div><dt><code>sync</code></dt><dd>Run the flows now. <code>--dry-run</code> reports what would change without writing anything, <code>--flows a b</code> runs only those flows, and <code>--every 30m</code> keeps repeating.</dd></div>
+          <div><dt><code>status</code></dt><dd>Show what has been synced and the last run's summary.</dd></div>
+          <div><dt><code>doctor</code></dt><dd>Check both accounts and list your devices and recent activities.</dd></div>
+          <div><dt><code>logs</code></dt><dd>Show the log. Add <code>-f</code> to follow it.</dd></div>
+          <div><dt><code>unmapped</code></dt><dd>List Garmin exercises that have no confident Hevy match.</dd></div>
+          <div><dt><code>push-to-watch</code></dt><dd>Send planned workouts to the watch now.</dd></div>
+          <div><dt><code>schedule</code></dt><dd><code>install</code>, <code>remove</code> or <code>status</code> for the background schedule.</dd></div>
+          <div><dt><code>--version</code></dt><dd>Print the installed version.</dd></div>
+        </dl>
+      </section>
+
+      <section id="privacy" aria-labelledby="privacy-title">
+        <h2 id="privacy-title">Privacy and safety</h2>
+        <ul class="plain">
+          <li>It runs on your computer. Nothing leaves it except requests to Hevy and Garmin.</li>
+          <li>Your Garmin password is used once, to sign in, and is not saved. The sign-in leaves refreshable tokens in <code>~/.garminconnect</code>.</li>
+          <li>The Hevy API key and settings live in one folder for your user account. Set <code>GH_SYNC_HOME</code> to use a different one.
+            <dl class="paths">
+              <div><dt>Linux</dt><dd><code>~/.config/garmin-hevy-sync</code></dd></div>
+              <div><dt>macOS</dt><dd><code>~/Library/Application Support/garmin-hevy-sync</code></dd></div>
+              <div><dt>Windows</dt><dd><code>%APPDATA%\garmin-hevy-sync</code></dd></div>
+            </dl>
+          </li>
+          <li>Flow A merges into the watch recording instead of replacing it, so the heart rate, training effect and body battery Garmin recorded stay as they were.</li>
+          <li><code>sync --dry-run</code> shows what a run would change without writing anything.</li>
+          <li>When a run fails, for example because the Garmin sign-in expired, you get a desktop notification. To get a push on your phone instead, set <code>GH_NOTIFY_URL</code> to an ntfy-style URL.</li>
+          <li>Keep two-factor authentication on. The emailed code is needed once, at sign-in.</li>
+        </ul>
+      </section>
+
+      <section id="faq" aria-labelledby="faq-title">
+        <h2 id="faq-title">Questions</h2>
+        <details>
+          <summary>What do I need?</summary>
+          <p>Hevy Pro, because Hevy's API is only available to subscribers. A Garmin Connect account and a watch that records Strength activities; it was developed on a Venu 4. A computer that is on some of the time, or a server that runs Docker. The installer brings everything else.</p>
+        </details>
+        <details>
+          <summary>Does Garmin keep my heart rate?</summary>
+          <p>Yes. Flow A merges the Hevy sets into the activity your watch recorded, so heart rate, training load and calories stay. The other direction cannot carry heart rate: Hevy's API has no field for it, so watch-only sessions reach Hevy without it.</p>
+        </details>
+        <details>
+          <summary>How soon does a workout show up in the other app?</summary>
+          <p>Within one sync interval, 30 minutes by default, as long as the computer is awake. It is not instant. Run <code>garmin-hevy-sync sync</code> to sync straight away.</p>
+        </details>
+        <details>
+          <summary>What happens if I delete a workout?</summary>
+          <p>Deletions are not copied. A workout you delete in one app stays in the other until you delete it there too.</p>
+        </details>
+        <details>
+          <summary>Can it stop working?</summary>
+          <p>Yes. Garmin has no public API for this, so the Garmin side uses a community library that signs in the way the Garmin Connect app does. A change to Garmin's sign-in can break it until that library is updated. If a run fails you get a notification, and <code>garmin-hevy-sync doctor</code> shows which side is failing.</p>
+        </details>
+        <details>
+          <summary>hevy2garmin says its PyPI command line is deprecated. Is that a problem?</summary>
+          <p>No. The hevy2garmin command line on PyPI is deprecated after 31 October 2026. This project pins a version that keeps working.</p>
+        </details>
+        <details>
+          <summary>How do I uninstall it?</summary>
+          <p>Run <code>garmin-hevy-sync schedule remove</code>, then <code>uv tool uninstall garmin-hevy-sync</code>. Delete the settings folder listed under <a href="#privacy">Privacy and safety</a>, and <code>~/.garminconnect</code> and <code>~/.hevy2garmin</code> if no other tool uses them. With Docker, run <code>docker compose down -v</code> in the cloned folder; <code>-v</code> also deletes the data volume.</p>
+        </details>
+        <details>
+          <summary>Is this made by Garmin or Hevy?</summary>
+          <p>No. It is an independent open source project and is not affiliated with, endorsed by or supported by Garmin or Hevy.</p>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <p class="foot-links">
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync">Source on GitHub</a>
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync/blob/main/CONTRIBUTING.md">Contributing</a>
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync/issues">Issues</a>
+        <a href="https://github.com/danieltyukov/garmin-hevy-sync/blob/main/LICENSE">MIT license</a>
+      </p>
+      <p>Flows A and C use <a href="https://github.com/drkostas/hevy2garmin">hevy2garmin</a> by drkostas. Not affiliated with Garmin or Hevy. Garmin and Hevy are trademarks of their owners.</p>
+    </footer>
+  </div>
+  <script>
+    const status = document.getElementById('copy-status');
+    for (const button of document.querySelectorAll('.copy')) {
+      button.addEventListener('click', async () => {
+        const text = button.parentElement.querySelector('code').textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          button.textContent = 'Copied';
+          status.textContent = 'Command copied to the clipboard.';
+        } catch {
+          button.textContent = 'Select and copy';
+          status.textContent = 'Copying failed. Select the command and copy it.';
+        }
+        setTimeout(() => { button.textContent = 'Copy'; status.textContent = ''; }, 1800);
+      });
+    }
+  </script>
+</body>
+</html>

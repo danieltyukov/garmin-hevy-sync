@@ -1,0 +1,278 @@
+:root {
+  --bg: #f6f7f4;
+  --surface: #eceeea;
+  --ink: #15191a;
+  --muted: #4a5254;
+  --faint: #626b6d;
+  --rule: #d9ddd8;
+  --shot-edge: #d9ddd8;
+  /* Direction colours: green writes to Garmin, amber writes to Hevy. */
+  --to-garmin: #0e7a50;
+  --to-hevy: #b8650c;
+  --to-garmin-ink: #0d7049;
+  --to-hevy-ink: #9a5300;
+  --mark-dot: #15191a;
+  --highlight: rgba(184, 101, 12, 0.16);
+  --font: "Archivo", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131816;
+    --surface: #1b211f;
+    --ink: #e8ede9;
+    --muted: #a7b1ac;
+    --faint: #8c9691;
+    --rule: #2a322e;
+    --shot-edge: #3a433f;
+    --to-garmin: #4cc48d;
+    --to-hevy: #efae48;
+    --to-garmin-ink: #4cc48d;
+    --to-hevy-ink: #efae48;
+    --mark-dot: #e8ede9;
+    --highlight: rgba(239, 174, 72, 0.2);
+  }
+  .shots, .muscles img { filter: brightness(0.92); }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 16px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+img, svg { max-width: 100%; }
+img { height: auto; display: block; }
+
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--faint); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+a:hover { color: var(--to-garmin-ink); text-decoration-color: currentColor; }
+:focus-visible { outline: 2px solid var(--to-garmin-ink); outline-offset: 3px; border-radius: 2px; }
+
+code { font-family: var(--mono); font-size: 0.86em; }
+:not(pre) > code { background: var(--surface); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.skip { position: absolute; left: 16px; top: -48px; background: var(--ink); color: var(--bg); padding: 8px 12px; border-radius: 4px; z-index: 10; }
+.skip:focus { top: 12px; }
+
+.wrap { max-width: 800px; margin: 0 auto; padding: 0 20px; }
+
+/* Header */
+header.top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 26px 0 0; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font-weight: 700; font-stretch: 75%; font-size: 22px; letter-spacing: -0.005em; }
+.brand:hover { color: inherit; }
+.mark { width: 30px; height: 30px; display: block; flex: none; }
+.mark-g { fill: var(--to-garmin); }
+.mark-h { fill: var(--to-hevy); }
+.mark-k { fill: var(--mark-dot); }
+nav.links { display: flex; gap: 22px; font-size: 15px; }
+nav.links a { color: var(--muted); text-decoration: none; }
+nav.links a:hover { color: var(--ink); text-decoration: underline; }
+
+/* Hero */
+.hero { padding: 88px 0 64px; }
+.hero h1 {
+  font-stretch: 75%;
+  font-weight: 800;
+  font-size: clamp(40px, 7.4vw, 70px);
+  line-height: 1.0;
+  letter-spacing: -0.018em;
+  margin: 0 0 26px;
+  max-width: 11.5em;
+  text-wrap: balance;
+}
+.hero .lead { font-size: 19px; line-height: 1.55; color: var(--muted); max-width: 36em; margin: 0 0 36px; }
+.hero .note { font-size: 14.5px; color: var(--faint); margin: 14px 0 0; }
+
+/* Tabs shared by the install box and the before/after figure */
+.install, .compare { position: relative; border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.install > input, .compare > input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.tabs { display: flex; flex-wrap: wrap; background: var(--surface); border-bottom: 1px solid var(--rule); }
+.tabs label { padding: 9px 16px; font-size: 14px; color: var(--muted); cursor: pointer; border-right: 1px solid var(--rule); user-select: none; }
+.tabs label:hover { color: var(--ink); }
+
+.panel { display: none; position: relative; }
+.panel pre { margin: 0; padding: 18px 84px 6px 18px; font-family: var(--mono); font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.panel pre code { font-size: inherit; }
+.panel-note { margin: 0; padding: 4px 18px 16px; font-size: 14px; color: var(--muted); max-width: none; }
+.copy {
+  position: absolute; top: 12px; right: 12px;
+  border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+  font: 500 13px var(--font); padding: 6px 11px; border-radius: 5px; cursor: pointer;
+}
+.copy:hover { border-color: var(--faint); }
+
+#t-unix:checked ~ .tabs label[for="t-unix"],
+#t-win:checked ~ .tabs label[for="t-win"],
+#t-docker:checked ~ .tabs label[for="t-docker"],
+#t-uv:checked ~ .tabs label[for="t-uv"],
+#c-before:checked ~ .tabs label[for="c-before"],
+#c-after:checked ~ .tabs label[for="c-after"] { color: var(--ink); background: var(--bg); box-shadow: inset 0 -2px 0 var(--ink); }
+#t-unix:checked ~ .p-unix,
+#t-win:checked ~ .p-win,
+#t-docker:checked ~ .p-docker,
+#t-uv:checked ~ .p-uv { display: block; }
+#t-unix:focus-visible ~ .tabs label[for="t-unix"],
+#t-win:focus-visible ~ .tabs label[for="t-win"],
+#t-docker:focus-visible ~ .tabs label[for="t-docker"],
+#t-uv:focus-visible ~ .tabs label[for="t-uv"],
+#c-before:focus-visible ~ .tabs label[for="c-before"],
+#c-after:focus-visible ~ .tabs label[for="c-after"] { outline: 2px solid var(--to-garmin-ink); outline-offset: -4px; border-radius: 4px; }
+
+/* Sections */
+main > section { padding: 60px 0; border-top: 1px solid var(--rule); }
+h2 { font-stretch: 75%; font-weight: 750; font-size: clamp(30px, 4.6vw, 38px); line-height: 1.08; letter-spacing: -0.012em; margin: 0 0 20px; }
+h3 { font-weight: 650; font-size: 17px; line-height: 1.35; margin: 0 0 8px; }
+section p { max-width: 38em; margin: 0 0 16px; }
+section p:last-child { margin-bottom: 0; }
+
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; margin: 28px 0; padding: 22px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.split ul { list-style: none; margin: 0; padding: 0; color: var(--muted); }
+.split li { padding: 3px 0; }
+.split h3 { color: var(--ink); }
+
+/* Flow diagram and list */
+.flowmap { margin: 36px 0 40px; }
+.flowmap svg { display: block; width: 100%; height: auto; }
+.flowmap .fm-narrow { display: none; max-width: 420px; }
+.flowmap figcaption { margin-top: 16px; font-size: 14px; color: var(--muted); }
+.fm-col { fill: var(--ink); font-family: var(--font); font-size: 16px; font-weight: 700; font-stretch: 75%; }
+.fm-box { fill: var(--surface); stroke: var(--rule); stroke-width: 1.5; }
+.fm-label { fill: var(--ink); font-family: var(--font); font-size: 16px; }
+.fm-note { fill: var(--muted); font-family: var(--font); font-size: 14.5px; text-anchor: middle; }
+.fm-note.fm-end { text-anchor: end; }
+.fm-to-garmin line, .fm-to-garmin path { stroke: var(--to-garmin); stroke-width: 2; fill: none; }
+.fm-to-hevy line, .fm-to-hevy path { stroke: var(--to-hevy); stroke-width: 2; fill: none; }
+.fm-to-garmin polygon { fill: var(--to-garmin); }
+.fm-to-hevy polygon { fill: var(--to-hevy); }
+.fm-key circle { fill: var(--bg); stroke-width: 1.75; }
+.fm-key.fm-to-garmin circle { stroke: var(--to-garmin); }
+.fm-key.fm-to-hevy circle { stroke: var(--to-hevy); }
+.fm-key text { font-family: var(--font); font-size: 13px; font-weight: 700; text-anchor: middle; }
+.fm-key.fm-to-garmin text { fill: var(--to-garmin-ink); }
+.fm-key.fm-to-hevy text { fill: var(--to-hevy-ink); }
+
+ol.flows { list-style: none; margin: 0 0 44px; padding: 0; max-width: 38em; }
+ol.flows li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 14px; padding: 0 0 16px; }
+ol.flows li:last-child { padding-bottom: 0; }
+ol.flows b { font-weight: 650; }
+.key {
+  width: 24px; height: 24px; margin-top: 1px; border-radius: 50%; border: 1.75px solid currentColor;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; line-height: 1;
+}
+.to-garmin .key { color: var(--to-garmin-ink); }
+.to-hevy .key { color: var(--to-hevy-ink); }
+
+#how h3 { margin-top: 36px; }
+dl.guards { display: grid; grid-template-columns: 1fr 1fr; gap: 0 40px; margin: 20px 0 0; }
+dl.guards > div { padding: 14px 0; border-top: 1px solid var(--rule); }
+dl.guards dt { font-weight: 650; margin-bottom: 4px; }
+dl.guards dd { margin: 0; color: var(--muted); font-size: 16px; }
+
+/* Before and after */
+.compare { margin: 32px 0; }
+.shots { display: grid; background: #fff; }
+.shots > picture { grid-area: 1 / 1; align-self: start; display: block; }
+.shots img { width: 100%; }
+.shot-before { width: 94.29%; }
+.shot-after { width: 100%; }
+#c-before:checked ~ .shots .shot-after,
+#c-after:checked ~ .shots .shot-before { visibility: hidden; }
+.compare figcaption { padding: 10px 16px; font-size: 14px; color: var(--muted); border-top: 1px solid var(--rule); }
+
+.cause { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 40px; align-items: start; }
+pre.code {
+  margin: 0 0 16px; padding: 14px 18px; background: var(--surface); border-radius: 6px;
+  font-family: var(--mono); font-size: 14px; line-height: 1.6; overflow-x: auto;
+}
+pre.code code { font-size: inherit; }
+pre.code mark { background: var(--highlight); color: inherit; padding: 2px 4px; margin: 0 -4px; border-radius: 3px; }
+.muscles { margin: 0; }
+.muscles img { background: #fff; border: 1px solid var(--shot-edge); border-radius: 6px; }
+.muscles figcaption { margin-top: 10px; font-size: 14px; color: var(--muted); }
+
+/* Background */
+ol.steps { list-style: none; padding: 0; margin: 24px 0 32px; counter-reset: step; max-width: 38em; }
+ol.steps li { position: relative; padding: 0 0 14px 40px; counter-increment: step; }
+ol.steps li::before {
+  content: counter(step); position: absolute; left: 0; top: 1px;
+  width: 26px; height: 26px; border: 1.5px solid var(--rule); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 650; color: var(--muted);
+}
+ol.steps b { font-weight: 650; }
+
+table.systems { width: 100%; border-collapse: collapse; margin: 0 0 20px; font-size: 16px; }
+table.systems th, table.systems td { text-align: left; vertical-align: top; padding: 11px 16px 11px 0; border-bottom: 1px solid var(--rule); }
+table.systems thead th { font-size: 14px; font-weight: 600; color: var(--muted); padding-top: 0; }
+table.systems tbody th { font-weight: 650; width: 26%; }
+table.systems td { color: var(--muted); }
+
+#background h3 { margin-top: 40px; }
+dl.commands { margin: 18px 0 0; }
+dl.commands > div { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 4px 20px; padding: 10px 0; border-top: 1px solid var(--rule); }
+dl.commands > div:last-child { border-bottom: 1px solid var(--rule); }
+dl.commands dt code { background: none; padding: 0; font-size: 15px; font-weight: 600; }
+dl.commands dd { margin: 0; color: var(--muted); font-size: 16px; }
+
+ul.plain { padding-left: 20px; margin: 0; max-width: 38em; }
+ul.plain li { margin-bottom: 10px; padding-left: 4px; }
+ul.plain li::marker { color: var(--faint); }
+dl.paths { margin: 10px 0 4px; font-size: 15.5px; }
+dl.paths > div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 2px 12px; padding: 3px 0; }
+dl.paths dt { color: var(--muted); }
+dl.paths dd { margin: 0; }
+
+/* FAQ */
+details { border-top: 1px solid var(--rule); padding: 0; max-width: 40em; }
+details:last-of-type { border-bottom: 1px solid var(--rule); }
+summary { cursor: pointer; font-weight: 550; list-style: none; display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding: 14px 0; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--faint); font-size: 21px; line-height: 1; flex: none; }
+details[open] summary::after { content: "\2212"; }
+summary:hover { color: var(--to-garmin-ink); }
+details p { margin: 0 0 16px; color: var(--muted); }
+
+/* Footer */
+footer { border-top: 1px solid var(--rule); padding: 30px 0 56px; font-size: 14.5px; color: var(--faint); }
+footer p { margin: 0 0 8px; max-width: none; }
+footer a { color: var(--muted); }
+.foot-links { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-bottom: 14px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .tabs label, .copy, a, summary { transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease; }
+}
+
+@media (max-width: 720px) {
+  .flowmap .fm-wide { display: none; }
+  .flowmap .fm-narrow { display: block; }
+  dl.guards { grid-template-columns: minmax(0, 1fr); }
+  .cause { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .muscles { max-width: 340px; }
+}
+
+@media (max-width: 560px) {
+  .wrap { padding: 0 16px; }
+  header.top { padding-top: 20px; }
+  nav.links { gap: 18px; }
+  .hero { padding: 56px 0 48px; }
+  .hero .lead { font-size: 18px; }
+  main > section { padding: 48px 0; }
+  .panel pre { padding: 16px 16px 4px; font-size: 13.5px; }
+  .panel-note { padding: 4px 16px 56px; }
+  .copy { top: auto; bottom: 12px; right: auto; left: 16px; }
+  .tabs label { padding: 9px 12px; font-size: 13.5px; }
+  .split { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .shot-before { width: 100%; }
+  dl.commands > div { grid-template-columns: minmax(0, 1fr); }
+  table.systems tbody th { width: 30%; }
+}
