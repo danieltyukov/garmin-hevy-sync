@@ -1,9 +1,18 @@
-.env
+# Python and tooling
 .venv/
-data/
-logs/
 __pycache__/
 *.pyc
-.pytest_cache/
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+.worktrees/
+.ci-home/
+
+# Personal data from a 0.1 checkout layout (0.2 keeps it in the per-user home
+# folder instead, but these must never be committed if they are still around)
+.env
 config/profile.json
+data/
+logs/

@@ -5,7 +5,7 @@ constants (``BENCH_PRESS`` / ``BARBELL_BENCH_PRESS``). Hevy uses human titles
 with the equipment in parentheses ("Bench Press (Barbell)"). Neither side
 publishes a crosswalk, so we normalise both into token sets and score them.
 
-The resolved map is cached to ``data/exercise_map.json``. Hand-written entries
+The resolved map is cached to ``exercise_map.json`` in the home folder. Hand-written entries
 under ``overrides`` always win, which is the escape hatch when the scorer picks
 the wrong variant.
 """
@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
-from .config import EXERCISE_MAP_FILE
+from .config import paths
 
 logger = logging.getLogger("gh_sync.exercise_map")
 
@@ -190,10 +191,14 @@ class Match:
 
 
 class ExerciseMapper:
-    def __init__(self, templates: Iterable[dict[str, Any]], threshold: float = 0.55,
-                 map_file: Path = EXERCISE_MAP_FILE) -> None:
+    def __init__(
+        self,
+        templates: Iterable[dict[str, Any]],
+        threshold: float = 0.55,
+        map_file: Path | None = None,
+    ) -> None:
         self.threshold = threshold
-        self.map_file = map_file
+        self.map_file = map_file or paths().exercise_map
         self.templates = [
             {"id": t["id"], "title": t.get("title", ""), "tokens": tokenize(t.get("title", ""))}
             for t in templates
@@ -208,7 +213,7 @@ class ExerciseMapper:
     def _load(self) -> dict:
         if self.map_file.exists():
             try:
-                return json.loads(self.map_file.read_text())
+                return json.loads(self.map_file.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 logger.warning("%s is not valid JSON; starting fresh", self.map_file)
         return {}
@@ -225,7 +230,7 @@ class ExerciseMapper:
             "resolved": dict(sorted(self.resolved.items())),
             "unmapped": dict(sorted(self.unmapped.items())),
         }
-        self.map_file.write_text(json.dumps(payload, indent=2) + "\n")
+        self.map_file.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     @staticmethod
     def _equipment_rank(template: dict) -> int:
@@ -259,11 +264,16 @@ class ExerciseMapper:
             if value <= 0.0:
                 continue
             rank = self._equipment_rank(template)
-            if best is None or value > best.score:
-                best, best_rank = Match(template["id"], template["title"], value), rank
-            elif value == best.score and (
-                rank < best_rank
-                or (rank == best_rank and len(template["title"]) < len(best.hevy_title))
+            if (
+                best is None
+                or value > best.score
+                or (
+                    value == best.score
+                    and (
+                        rank < best_rank
+                        or (rank == best_rank and len(template["title"]) < len(best.hevy_title))
+                    )
+                )
             ):
                 best, best_rank = Match(template["id"], template["title"], value), rank
         return best

@@ -1,20 +1,25 @@
-"""Garmin Connect access via python-garminconnect / garth.
+"""Garmin Connect access via python-garminconnect.
 
-Garmin has no public consumer API. ``garth`` authenticates through the mobile
-SSO flow and caches OAuth tokens under ``~/.garminconnect``; they refresh
-themselves indefinitely, so the password is only touched when the cache is
-missing or the refresh token has finally expired.
+Garmin has no public consumer API. garminconnect signs in through the same SSO
+flow as the mobile app and caches OAuth tokens in a token store (by default
+``~/.garminconnect``, shared with hevy2garmin). The tokens refresh themselves,
+so the password is only needed for the one interactive ``login``.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from garminconnect import Garmin
+from garminconnect import (
+    Garmin,
+    GarminConnectAuthenticationError,
+    GarminConnectTooManyRequestsError,
+)
 
-from .config import GARMIN_TOKENS
+from .config import garmin_token_dir
 
 logger = logging.getLogger("gh_sync.garmin")
 
@@ -26,45 +31,74 @@ class GarminLoginRequired(RuntimeError):
     """Raised when a fresh interactive login is needed and cannot be done here."""
 
 
-def connect(email: str, password: str, interactive: bool = False) -> Garmin:
-    """Return a logged-in client, preferring cached tokens over the password.
+class GarminUnavailable(RuntimeError):
+    """Garmin could not be reached or refused for now; the next run retries."""
 
-    With MFA enabled on the account, a full login blocks on a one-time code
-    delivered by email. That is fine at a terminal and fatal under systemd,
-    where nothing can answer the prompt and the unit would sit at its 30 minute
-    timeout. So the unattended path refuses to attempt a full login at all and
-    tells the operator to run ``gh-sync login`` instead.
+
+def resume() -> Garmin:
+    """A client running on the cached tokens, for every unattended path.
+
+    Built without credentials on purpose. Given a password, garminconnect
+    falls back to a full sign-in whenever the token store is missing or
+    rejected. Under a scheduler nobody can answer the emailed MFA code, and
+    repeating that every 30 minutes earns a 429 from Garmin's SSO, which then
+    blocks the manual sign-in too. Failing fast with a clear instruction is
+    the better outcome.
     """
-    client = Garmin(
-        email=email,
-        password=password,
-        prompt_mfa=_prompt_for_mfa_code if interactive else None,
-        return_on_mfa=False,
-    )
-
+    tokens = garmin_token_dir()
+    client = Garmin()
     try:
-        client.login(str(GARMIN_TOKENS))
-        logger.info("Garmin session resumed from %s", GARMIN_TOKENS)
-        return client
-    except Exception as exc:  # noqa: BLE001 - garth raises a wide range here
-        if not interactive:
+        client.login(str(tokens))
+    except GarminConnectTooManyRequestsError as exc:
+        raise GarminUnavailable(
+            "Garmin is rate limiting this IP address. It clears on its own; the next "
+            "scheduled run will try again."
+        ) from exc
+    except GarminConnectAuthenticationError as exc:
+        raise GarminLoginRequired(
+            f"Garmin sign-in needed: the token store at {tokens} is missing or expired. "
+            "Run `garmin-hevy-sync login` in a terminal."
+        ) from exc
+    except Exception as exc:
+        if not has_token_store():
             raise GarminLoginRequired(
-                f"Garmin token store at {GARMIN_TOKENS} is missing or expired ({exc}). "
-                "Run 'gh-sync login' from a terminal to sign in and cache new tokens."
+                f"Garmin sign-in needed: no token store at {tokens}. "
+                "Run `garmin-hevy-sync login` in a terminal."
             ) from exc
-        logger.info("Token resume failed (%s); starting a full login", exc)
-
-    client.login()
-    GARMIN_TOKENS.mkdir(parents=True, exist_ok=True)
-    client.garth.dump(str(GARMIN_TOKENS))
-    logger.info("Garmin tokens written to %s", GARMIN_TOKENS)
+        # Tokens exist, so this is the network or Garmin itself, not the
+        # sign-in. Saying "log in again" here would send people chasing a
+        # problem they do not have.
+        raise GarminUnavailable(f"Could not reach Garmin Connect: {exc}") from exc
+    logger.info("Garmin session resumed from %s", tokens)
     return client
 
 
-def _prompt_for_mfa_code() -> str:
+def has_token_store() -> bool:
+    tokens = garmin_token_dir()
+    return (tokens.is_dir() and any(tokens.iterdir())) or tokens.is_file()
+
+
+def sign_in(email: str, password: str, prompt_mfa: Callable[[], str] | None = None) -> Garmin:
+    """Full interactive sign-in. Writes fresh tokens to the token store."""
+    tokens = garmin_token_dir()
+    tokens.mkdir(parents=True, exist_ok=True)
+    client = Garmin(
+        email=email,
+        password=password,
+        prompt_mfa=prompt_mfa or prompt_for_mfa_code,
+        return_on_mfa=False,
+    )
+    # With a token store path, garminconnect tries the cached tokens first,
+    # falls back to the credentials, and writes the new tokens back itself.
+    client.login(str(tokens))
+    logger.info("Garmin tokens written to %s", tokens)
+    return client
+
+
+def prompt_for_mfa_code() -> str:
     """Read the emailed one-time code from the terminal."""
     print("\nGarmin sent a security code to your email.")
-    code = input("Enter the Garmin security code: ").strip()
+    code = input("Security code: ").strip()
     if not code:
         raise RuntimeError("No security code entered")
     return code
@@ -81,11 +115,20 @@ def parse_start(activity: dict[str, Any]) -> datetime | None:
         return None
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(raw, fmt).replace(tzinfo=UTC)
         except ValueError:
             continue
     logger.warning("Unparseable startTimeGMT %r on activity %s", raw, activity.get("activityId"))
     return None
+
+
+def activity_end(activity: dict[str, Any], start: datetime) -> datetime:
+    """When an activity finished: its start plus the elapsed time Garmin recorded."""
+    seconds = activity.get("elapsedDuration") or activity.get("duration") or 0
+    try:
+        return start + timedelta(seconds=float(seconds))
+    except (TypeError, ValueError):
+        return start
 
 
 def strength_activities(client: Garmin, lookback_days: int) -> list[dict[str, Any]]:
@@ -98,14 +141,14 @@ def strength_activities(client: Garmin, lookback_days: int) -> list[dict[str, An
     start = end - timedelta(days=lookback_days)
     activities = client.get_activities_by_date(start.isoformat(), end.isoformat())
     strength = [
-        a
-        for a in activities
-        if (a.get("activityType") or {}).get("typeKey") in STRENGTH_TYPE_KEYS
+        a for a in activities if (a.get("activityType") or {}).get("typeKey") in STRENGTH_TYPE_KEYS
     ]
     strength.sort(key=lambda a: a.get("startTimeGMT") or "")
     logger.info(
         "Garmin returned %s activities since %s, %s of them strength",
-        len(activities), start, len(strength),
+        len(activities),
+        start,
+        len(strength),
     )
     return strength
 

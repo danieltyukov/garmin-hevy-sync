@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Entry point for the systemd timer. Runs all five flows and exits non-zero if
-# any of them failed, so `systemctl --user status` reflects reality.
+# Kept so that systemd timers installed by version 0.1 (which point here) keep
+# working after a `git pull`. New installs do not use this file:
+# `garmin-hevy-sync schedule install` writes units that call the tool directly.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec "$REPO/.venv/bin/gh-sync" sync "$@"
+exec "$REPO/.venv/bin/python" -m gh_sync sync "$@"

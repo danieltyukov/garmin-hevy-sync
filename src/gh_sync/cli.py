@@ -1,4 +1,4 @@
-"""Orchestrator for all five sync flows.
+"""Command line entry point and the orchestrator for the five sync flows.
 
 Flow order is load-bearing. A runs before B so that Hevy workouts reach Garmin
 first, merging into whatever the watch recorded. By the time B looks at Garmin
@@ -12,159 +12,336 @@ E runs last, because it repairs what A wrote and wants A's PUT to have landed.
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import logging
-import shutil
-import subprocess
+import os
+import platform
+import signal
 import sys
-from datetime import datetime, timezone
+import time
+from collections import deque
+from collections.abc import Callable
+from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any
 
-from . import state
+from . import __version__, h2g, notify, schedule, state
 from .config import (
-    GARMIN_TOKENS,
-    EXERCISE_MAP_FILE,
-    LOG_DIR,
+    HOME_ENV,
+    ConfigError,
     Settings,
-    ensure_dirs,
-    hevy2garmin_binary,
+    ensure_home,
+    garmin_token_dir,
+    hevy2garmin_home,
+    migrate_legacy_layout,
+    parse_interval,
+    paths,
+    update_env_file,
 )
-from .flows import (
-    flow_b_garmin_to_hevy,
-    flow_d_body_measurements,
-    flow_e_exercise_names,
+from .flows import flow_b_garmin_to_hevy, flow_d_body_measurements, flow_e_exercise_names
+from .garmin_client import (
+    GarminLoginRequired,
+    GarminUnavailable,
+    has_token_store,
+    resume,
+    sign_in,
+    strength_activities,
 )
-from .garmin_client import connect
 from .hevy import HevyClient
+from .lock import AlreadyRunning, run_lock
 
 logger = logging.getLogger("gh_sync")
 
+FLOWS = ("a", "b", "c", "d", "e")
+FLOW_LABELS = {
+    "a_hevy_to_garmin": "A  Hevy workouts -> Garmin",
+    "c_routines_to_garmin": "C  Hevy routines -> Garmin",
+    "b_garmin_to_hevy": "B  watch sessions -> Hevy",
+    "d_body_measurements": "D  weigh-ins -> Hevy",
+    "e_exercise_names": "E  exercise names repaired",
+}
 
-def setup_logging(verbose: bool) -> None:
-    ensure_dirs()
+
+def _interactive() -> bool:
+    return bool(sys.stdin and sys.stdin.isatty())
+
+
+class _RotatingLog(RotatingFileHandler):
+    """Rotation that survives the file being held open elsewhere.
+
+    On Windows a rename fails while another process has the file open, for
+    example `garmin-hevy-sync logs -f` in another window. The stock handler
+    then drops every record until the rename succeeds; this one keeps writing
+    to the current file and tries to rotate again on the next record.
+    """
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except OSError:
+            if self.stream is None:
+                self.stream = self._open()
+
+
+def setup_logging(verbose: bool, console_level: int = logging.INFO) -> None:
+    p = ensure_home()
     level = logging.DEBUG if verbose else logging.INFO
     fmt = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
-    # Rotate rather than append forever: the unit runs every 30 minutes and
-    # writes ~25 lines a run, so a plain FileHandler grows without bound on a
-    # box nothing else prunes. Five 5 MB generations is roughly a year of
-    # history at that rate.
-    handlers.append(
-        RotatingFileHandler(
-            LOG_DIR / "sync.log", maxBytes=5 * 1024 * 1024, backupCount=5
-        )
+    # Rotate rather than append forever: a run every 30 minutes writes ~30
+    # lines, so five 5 MB generations is roughly a year of history.
+    file_handler = _RotatingLog(
+        p.log_file, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
     )
-    logging.basicConfig(level=level, format=fmt, handlers=handlers, force=True)
+    file_handler.setFormatter(logging.Formatter(fmt))
+    handlers: list[logging.Handler] = [file_handler]
+    # pythonw.exe (the windowless scheduled run on Windows) has no stdout.
+    if sys.stdout is not None:
+        console = logging.StreamHandler(sys.stdout)
+        console.setLevel(logging.DEBUG if verbose else console_level)
+        console.setFormatter(logging.Formatter(fmt))
+        handlers.append(console)
+    logging.basicConfig(level=level, handlers=handlers, force=True)
     # These are chatty at DEBUG and drown out our own lines.
-    for noisy in ("urllib3", "garth", "requests"):
+    for noisy in ("urllib3", "requests", "garminconnect", "garmin_auth"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _run_hevy2garmin(args: list[str], dry_run: bool) -> bool:
-    """Shell out to the hevy2garmin CLI. Returns True on success."""
-    binary = hevy2garmin_binary()
-    if not binary:
-        logger.error("hevy2garmin is not installed in this venv")
-        return False
-    command = [binary, *args]
-    if dry_run and "--dry-run" not in command:
-        command.append("--dry-run")
-    logger.info("Running %s", " ".join(command))
-    result = subprocess.run(command, capture_output=True, text=True, timeout=1800)
-    for line in (result.stdout or "").splitlines():
-        logger.info("[hevy2garmin] %s", line)
-    for line in (result.stderr or "").splitlines():
-        logger.warning("[hevy2garmin] %s", line)
-    if result.returncode != 0:
-        logger.error("hevy2garmin %s exited %s", args[0], result.returncode)
-        return False
-    return True
+# ---------------------------------------------------------------------- sync
 
 
-def flow_a(dry_run: bool) -> bool:
-    """Hevy workouts -> Garmin activities (merging into watch recordings)."""
-    return _run_hevy2garmin(["sync"], dry_run)
+def _pick_problem(problems: list[str]) -> str:
+    """The most actionable problem goes in the notification."""
+    for problem in problems:
+        if "login" in problem.lower() or "sign-in" in problem.lower():
+            return problem
+    return problems[0]
 
 
-def flow_c(dry_run: bool) -> bool:
-    """Hevy routines -> Garmin planned workouts."""
-    return _run_hevy2garmin(["sync-routines"], dry_run)
+def _run_flows(args: argparse.Namespace, background: bool) -> int:
+    settings = Settings.load(dry_run=args.dry_run)
+    selected = set(args.flows or FLOWS)
+    summary: dict[str, Any] = {}
+    problems: list[str] = []
+
+    with state.connect() as conn:
+        run_id = state.start_run(conn)
+
+        for flow, key, command in (
+            ("a", "a_hevy_to_garmin", ["sync"]),
+            ("c", "c_routines_to_garmin", ["sync-routines"]),
+        ):
+            if flow in selected:
+                ok = h2g.run_logged(command, dry_run=args.dry_run)
+                summary[key] = "ok" if ok else "failed"
+                if not ok:
+                    problems.append(f"flow {flow.upper()} (hevy2garmin {command[0]}) failed")
+
+        if selected & {"b", "d", "e"}:
+            try:
+                hevy = HevyClient(settings.hevy_api_key)
+                garmin = resume()
+            except (GarminLoginRequired, GarminUnavailable) as exc:
+                logger.error("%s", exc)
+                problems.append(str(exc))
+                for flow, key in (
+                    ("b", "b_garmin_to_hevy"),
+                    ("d", "d_body_measurements"),
+                    ("e", "e_exercise_names"),
+                ):
+                    if flow in selected:
+                        summary[key] = "not run: Garmin unavailable"
+            else:
+                # E runs last on purpose. It reads back what A wrote, and Garmin
+                # needs a moment before a PUT is visible to a GET; letting B and
+                # D do their API work first buys that settling time without a
+                # bare sleep. If it still reads too early it records nothing and
+                # the next run picks the activity up.
+                steps: list[tuple[str, str, Callable[[], dict[str, int]]]] = [
+                    (
+                        "b",
+                        "b_garmin_to_hevy",
+                        lambda: flow_b_garmin_to_hevy(garmin, hevy, conn, settings),
+                    ),
+                    (
+                        "d",
+                        "d_body_measurements",
+                        lambda: flow_d_body_measurements(garmin, hevy, conn, settings),
+                    ),
+                    (
+                        "e",
+                        "e_exercise_names",
+                        lambda: flow_e_exercise_names(garmin, conn, settings),
+                    ),
+                ]
+                for flow, key, step in steps:
+                    if flow not in selected:
+                        continue
+                    # One flow failing must not take the others down with it.
+                    try:
+                        summary[key] = step()
+                    except Exception as exc:
+                        logger.exception("Flow %s failed", flow.upper())
+                        summary[key] = f"failed: {exc}"
+                        problems.append(f"flow {flow.upper()}: {exc}")
+
+        ok = not problems
+        state.finish_run(conn, run_id, json.dumps(summary, default=str), ok)
+        state.prune_runs(conn)
+        if background and not args.dry_run:
+            if problems:
+                notify.failure(conn, _pick_problem(problems), settings.notify_url)
+            else:
+                notify.recovered(conn)
+
+    logger.info("Sync summary: %s", json.dumps(summary, default=str))
+    return 0 if ok else 1
+
+
+def _record_failure(exc: BaseException) -> None:
+    """Leave a trace of a background run that failed before the flows could.
+
+    A missing key or a crash under cron or pythonw has nowhere to print to,
+    so it becomes a failed run in the ledger (visible in `status`) and a
+    notification, the same as a flow failure would.
+    """
+    message = str(exc) if isinstance(exc, ConfigError) else f"{type(exc).__name__}: {exc}"
+    try:
+        with state.connect() as conn:
+            run_id = state.start_run(conn)
+            state.finish_run(conn, run_id, json.dumps({"error": message}), ok=False)
+            notify.failure(conn, message, os.environ.get("GH_NOTIFY_URL", "").strip())
+    except Exception:
+        logger.exception("Could not record the failed run")
+
+
+def _sync_once(args: argparse.Namespace, background: bool) -> int:
+    started = time.monotonic()
+    try:
+        with run_lock(paths().lock_file):
+            code = _run_flows(args, background)
+    except AlreadyRunning as exc:
+        if background:
+            logger.info("%s Skipping this run.", exc)
+            return 0
+        logger.error("%s", exc)
+        return 1
+    except Exception as exc:
+        if background and not args.dry_run:
+            _record_failure(exc)
+        raise
+    logger.info("Finished in %.1fs", time.monotonic() - started)
+    return code
+
+
+def _loop(args: argparse.Namespace, minutes: int) -> int:
+    """Sync forever. What the Docker image runs, and handy under any supervisor."""
+    # As PID 1 in a container, SIGTERM is ignored unless something handles it.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    logger.info("Syncing every %s minutes. Stop with Ctrl+C.", minutes)
+    while True:
+        started = time.monotonic()
+        try:
+            _sync_once(args, background=True)
+        except ConfigError as exc:
+            # Keep looping: the config file may be fixed while we wait, and a
+            # crash-looping container helps nobody.
+            logger.error("%s", exc)
+        except Exception:
+            logger.exception("Sync run crashed")
+        time.sleep(max(60.0, minutes * 60 - (time.monotonic() - started)))
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    settings = Settings.from_env(dry_run=args.dry_run)
-    ensure_dirs()
+    if args.every:
+        minutes = parse_interval(args.every)
+        if minutes < schedule.MIN_MINUTES:
+            raise ConfigError(f"--every must be at least {schedule.MIN_MINUTES} minutes.")
+        return _loop(args, minutes)
+    return _sync_once(args, background=not _interactive())
 
-    selected = set(args.flows) if args.flows else {"a", "b", "c", "d", "e"}
-    summary: dict[str, object] = {}
-    failures = 0
 
-    if "a" in selected:
-        summary["a_hevy_to_garmin"] = "ok" if flow_a(args.dry_run) else "failed"
-        failures += summary["a_hevy_to_garmin"] == "failed"
-    if "c" in selected:
-        summary["c_routines_to_garmin"] = "ok" if flow_c(args.dry_run) else "failed"
-        failures += summary["c_routines_to_garmin"] == "failed"
+# -------------------------------------------------------------------- status
 
-    if selected & {"b", "d", "e"}:
-        hevy = HevyClient(settings.hevy_api_key)
-        garmin = connect(settings.garmin_email, settings.garmin_password)
-        with state.connect() as conn:
-            run_id = state.start_run(conn)
-            if "b" in selected:
-                summary["b_garmin_to_hevy"] = flow_b_garmin_to_hevy(
-                    garmin, hevy, conn, settings
-                )
-            if "d" in selected:
-                summary["d_body_measurements"] = flow_d_body_measurements(
-                    garmin, hevy, conn, settings
-                )
-            # E runs last on purpose. It reads back what A wrote, and Garmin
-            # needs a moment before a PUT is visible to a GET; letting B and D
-            # do their several seconds of API work first buys that settling
-            # time without a bare sleep. If it still reads too early it simply
-            # records nothing and the next run picks the activity up.
-            if "e" in selected:
-                summary["e_exercise_names"] = flow_e_exercise_names(
-                    garmin, conn, settings
-                )
-            state.finish_run(conn, run_id, json.dumps(summary, default=str))
 
-    logger.info("Sync summary: %s", json.dumps(summary, default=str))
-    return 1 if failures else 0
+def _ago(iso: str | None) -> str:
+    if not iso:
+        return "never"
+    try:
+        moment = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    seconds = int((datetime.now(UTC) - moment).total_seconds())
+    local = moment.astimezone().strftime("%Y-%m-%d %H:%M")
+    if seconds < 90:
+        return f"{local} (just now)"
+    if seconds < 5400:
+        return f"{local} ({seconds // 60} min ago)"
+    if seconds < 172800:
+        return f"{local} ({seconds // 3600} h ago)"
+    return f"{local} ({seconds // 86400} days ago)"
+
+
+def _describe(value: Any) -> str:
+    if isinstance(value, dict):
+        return ", ".join(f"{k} {v}" for k, v in value.items())
+    return str(value)
+
+
+def _print_schedule() -> None:
+    try:
+        result = schedule.status()
+    except Exception as exc:
+        print(f"Schedule   could not check ({exc})")
+        return
+    state_text = "on" if result.installed else "off"
+    print(f"Schedule   {state_text} ({result.backend})")
+    for line in result.lines:
+        print(f"           {line}")
+    if not result.installed and result.backend not in ("container", "none"):
+        print("           turn it on with `garmin-hevy-sync schedule install`")
 
 
 def cmd_status(_: argparse.Namespace) -> int:
+    p = paths()
+    print(f"garmin-hevy-sync {__version__}")
+    print(f"Home       {p.home}")
+    _print_schedule()
+    if not p.state_db.exists():
+        print("\nNo sync has run yet. Start one with `garmin-hevy-sync sync`.")
+        return 0
     with state.connect() as conn:
+        last = state.last_run(conn)
+        if last:
+            outcome = {1: "ok", 0: "failed"}.get(
+                last["ok"], "incomplete" if not last["ended_at"] else ""
+            )
+            print(f"Last run   {_ago(last['started_at'])}{', ' + outcome if outcome else ''}")
+            try:
+                summary = json.loads(last["summary"] or "{}")
+            except ValueError:
+                summary = {}
+            for key, value in summary.items():
+                print(f"           {FLOW_LABELS.get(key, key)}: {_describe(value)}")
+
         rows = conn.execute(
             "SELECT status, COUNT(*) AS n FROM garmin_to_hevy GROUP BY status"
         ).fetchall()
-        print("Flow B (Garmin -> Hevy):")
-        if not rows:
-            print("  nothing recorded yet")
-        for row in rows:
-            print(f"  {row['status']:<9} {row['n']}")
-
+        counts = ", ".join(f"{row['n']} {row['status']}" for row in rows) or "none yet"
         measurements = conn.execute("SELECT COUNT(*) AS n FROM body_measurements").fetchone()
-        print(f"\nFlow D body measurements synced: {measurements['n']}")
-
         named = conn.execute("SELECT COUNT(*) AS n FROM exercise_names_fixed").fetchone()
-        print(f"Flow E activities with rendering exercise names: {named['n']}")
-
-        last = conn.execute(
-            "SELECT started_at, ended_at, summary FROM runs ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        if last:
-            print(f"\nLast run: {last['started_at']} -> {last['ended_at'] or 'incomplete'}")
-            if last["summary"]:
-                print(f"  {last['summary']}")
+        print("\nAll time")
+        print(f"  Watch sessions (flow B)   {counts}")
+        print(f"  Weigh-ins (flow D)        {measurements['n']} synced")
+        print(f"  Name repairs (flow E)     {named['n']} activities checked or fixed")
 
         recent = conn.execute(
             "SELECT garmin_activity_id, status, hevy_workout_id, note "
-            "FROM garmin_to_hevy ORDER BY synced_at DESC LIMIT 10"
+            "FROM garmin_to_hevy ORDER BY synced_at DESC LIMIT 5"
         ).fetchall()
         if recent:
-            print("\nMost recent activities considered:")
+            print("\nRecent watch sessions")
             for row in recent:
                 detail = row["hevy_workout_id"] or row["note"] or ""
                 print(f"  {row['garmin_activity_id']:<14} {row['status']:<9} {detail}")
@@ -172,10 +349,11 @@ def cmd_status(_: argparse.Namespace) -> int:
 
 
 def cmd_unmapped(_: argparse.Namespace) -> int:
-    if not EXERCISE_MAP_FILE.exists():
-        print(f"No map yet at {EXERCISE_MAP_FILE}. Run a sync first.")
+    map_file = paths().exercise_map
+    if not map_file.exists():
+        print(f"No exercise map yet at {map_file}. It is created by the first sync.")
         return 0
-    data = json.loads(EXERCISE_MAP_FILE.read_text())
+    data = json.loads(map_file.read_text(encoding="utf-8"))
     unmapped = data.get("unmapped", {})
     resolved = data.get("resolved", {})
     print(f"{len(resolved)} Garmin exercises mapped, {len(unmapped)} unmapped.\n")
@@ -188,43 +366,71 @@ def cmd_unmapped(_: argparse.Namespace) -> int:
             f"  {key:<40} seen={info.get('seen', 0):<3} "
             f"closest={info.get('closest', '?')} ({info.get('score', 0)})"
         )
-    print(f"\nEdit {EXERCISE_MAP_FILE}")
+    print(f"\nEdit {map_file}")
     return 0
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:
-    """Verify both credentials work and report what each side sees."""
+# -------------------------------------------------------------------- doctor
+
+
+def cmd_doctor(_: argparse.Namespace) -> int:
+    """Check the installation, both credentials and the schedule."""
     ok = True
-    settings = Settings.from_env()
-
-    print("Hevy:")
-    try:
-        hevy = HevyClient(settings.hevy_api_key)
-        # /v1/user/info wraps the user under a "data" key.
-        info = hevy.user_info()
-        user = info.get("data", info)
-        count = hevy.workout_count()
-        print(f"  connected as {user.get('name') or user.get('username') or '?'}")
-        print(f"  {count} workouts on the account")
-        templates = list(hevy.iter_exercise_templates())
-        routines = list(hevy.iter_routines())
-        print(f"  {len(templates)} exercise templates, {len(routines)} routines")
-        if count == 0:
-            print("  NOTE: no workouts yet, so flows A and B have nothing to move")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  FAILED: {exc}")
+    p = paths()
+    print("Environment")
+    print(
+        f"  garmin-hevy-sync {__version__}, Python {platform.python_version()}, "
+        f"{platform.system()} {platform.release()}"
+    )
+    print(f"  home: {p.home}")
+    h2g_version = h2g.version()
+    if h2g_version:
+        print(f"  hevy2garmin {h2g_version}")
+    else:
+        print("  hevy2garmin: MISSING (flows A and C cannot run)")
         ok = False
-
-    print("\nGarmin:")
+    stored = hevy2garmin_home() / "config.json"
     try:
-        garmin = connect(settings.garmin_email, settings.garmin_password)
-        name = garmin.get_full_name()
-        devices = garmin.get_devices() or []
-        print(f"  connected as {name}")
-        for device in devices:
-            print(f"  device: {device.get('displayName') or device.get('productDisplayName')}")
-        from .garmin_client import strength_activities
+        if stored.exists() and json.loads(stored.read_text(encoding="utf-8")).get(
+            "garmin_password"
+        ):
+            print(f"  WARNING: {stored} holds your Garmin password in plain text.")
+            print("           Run `garmin-hevy-sync setup` to remove it.")
+    except (OSError, ValueError):
+        pass
 
+    try:
+        settings = Settings.load(require_hevy=False)
+    except ConfigError as exc:
+        print(f"  config: {exc}")
+        return 1
+
+    print("\nHevy")
+    if not settings.hevy_api_key:
+        print("  no API key configured. Run `garmin-hevy-sync setup`.")
+        ok = False
+    else:
+        try:
+            hevy = HevyClient(settings.hevy_api_key)
+            info = hevy.user_info()
+            user = info.get("data", info)
+            print(f"  connected as {user.get('name') or user.get('username') or '?'}")
+            count = hevy.workout_count()
+            templates = sum(1 for _ in hevy.iter_exercise_templates())
+            routines = sum(1 for _ in hevy.iter_routines())
+            print(f"  {count} workouts, {templates} exercise templates, {routines} routines")
+        except Exception as exc:
+            print(f"  FAILED: {exc}")
+            print("  A 401 usually means a wrong key or a lapsed Hevy Pro subscription.")
+            ok = False
+
+    print("\nGarmin")
+    print(f"  token store: {garmin_token_dir()}{'' if has_token_store() else ' (missing)'}")
+    try:
+        garmin = resume()
+        print(f"  connected as {garmin.get_full_name()}")
+        for device in garmin.get_devices() or []:
+            print(f"  device: {device.get('displayName') or device.get('productDisplayName')}")
         activities = strength_activities(garmin, settings.lookback_days)
         print(f"  {len(activities)} strength activities in the last {settings.lookback_days} days")
         for activity in activities[-5:]:
@@ -232,37 +438,77 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 f"    {activity.get('startTimeGMT')}  {activity.get('activityName')} "
                 f"(id {activity.get('activityId')})"
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"  FAILED: {exc}")
         ok = False
 
-    print("\nhevy2garmin:")
-    binary = hevy2garmin_binary()
-    if binary:
-        print(f"  {binary}")
-    else:
-        print("  MISSING (flows A and C will not run)")
-        ok = False
-
+    print()
+    _print_schedule()
+    print("\nAll checks passed." if ok else "\nSome checks failed; see above.")
     return 0 if ok else 1
 
 
-def cmd_login(_: argparse.Namespace) -> int:
-    """One-time interactive Garmin sign-in, including the MFA code.
+# --------------------------------------------------------------------- login
 
-    Everything afterwards runs off the cached tokens in ~/.garminconnect, which
-    refresh themselves, so this should only ever need running once.
+
+def _mfa_from_file(code_file: Path, timeout: int = 600) -> Callable[[], str]:
+    """MFA code delivered through a file instead of a terminal.
+
+    For an operator or an agent fetching the emailed code: start
+    ``login --mfa-file PATH``, wait for MFA_REQUESTED, write the code to PATH.
     """
-    settings = Settings.from_env()
-    print(f"Signing in to Garmin Connect as {settings.garmin_email}")
+
+    def wait_for_code() -> str:
+        print(f"MFA_REQUESTED writing_to={code_file}", flush=True)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if code_file.exists():
+                code = code_file.read_text(encoding="utf-8").strip()
+                if code:
+                    code_file.unlink(missing_ok=True)
+                    print(f"MFA_CODE_RECEIVED len={len(code)}", flush=True)
+                    return code
+            time.sleep(2)
+        raise RuntimeError(f"No MFA code appeared in {code_file} within {timeout}s")
+
+    return wait_for_code
+
+
+def cmd_login(args: argparse.Namespace) -> int:
+    """Interactive Garmin sign-in, including the emailed MFA code.
+
+    Everything afterwards runs off the cached tokens, which refresh themselves.
+    """
+    settings = Settings.load(require_hevy=False)
+    p = ensure_home()
+    email = args.email or settings.garmin_email or input("Garmin Connect email: ").strip()
+    password = settings.garmin_password or getpass.getpass("Garmin password (input hidden): ")
+    prompt = None
+    if args.mfa_file:
+        code_file = Path(args.mfa_file)
+        code_file.unlink(missing_ok=True)
+        prompt = _mfa_from_file(code_file)
+    print(f"Signing in to Garmin Connect as {email}")
     try:
-        garmin = connect(settings.garmin_email, settings.garmin_password, interactive=True)
-    except Exception as exc:  # noqa: BLE001
+        client = sign_in(email, password, prompt)
+    except Exception as exc:
         print(f"\nLogin failed: {exc}")
+        if "429" in str(exc) or "too many" in str(exc).lower():
+            print("Garmin rate-limits sign-ins. Wait 15 minutes before trying again.")
         return 1
-    print(f"\nSigned in as {garmin.get_full_name()}")
-    print(f"Tokens cached in {GARMIN_TOKENS}; future runs need no password prompt.")
+    update_env_file(p.config_env, {"GARMIN_EMAIL": email})
+    print(f"\nSigned in as {client.get_full_name()}")
+    print(f"Tokens cached in {garmin_token_dir()}; scheduled runs need no password.")
     return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    from .setup_wizard import run
+
+    return run(no_schedule=args.no_schedule, minutes=parse_interval(args.every))
+
+
+# ---------------------------------------------------------------- push, logs
 
 
 def cmd_push_to_watch(args: argparse.Namespace) -> int:
@@ -272,72 +518,167 @@ def cmd_push_to_watch(args: argparse.Namespace) -> int:
     across now. Deliberately not part of the periodic sync, which would re-push
     the same workouts every 30 minutes.
     """
-    settings = Settings.from_env()
-    garmin = connect(settings.garmin_email, settings.garmin_password)
+    garmin = resume()
     devices = garmin.get_devices() or []
     if not devices:
         print("No Garmin devices found on the account.")
         return 1
-    device_id = devices[0].get("deviceId")
-    print(f"Pushing to {devices[0].get('displayName') or device_id}")
+    device = devices[min(args.device, len(devices) - 1)]
+    device_id = device.get("deviceId")
+    print(f"Pushing to {device.get('displayName') or device_id}")
 
     workouts = garmin.get_workouts(0, args.limit) or []
     pushed = 0
     for workout in workouts:
-        workout_id = workout.get("workoutId")
         try:
-            garmin.push_workout_to_device(workout_id, device_id)
+            garmin.push_workout_to_device(workout.get("workoutId"), device_id)
             print(f"  pushed {workout.get('workoutName')}")
             pushed += 1
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"  failed {workout.get('workoutName')}: {exc}")
     print(f"{pushed}/{len(workouts)} workouts pushed.")
+    return 0 if pushed == len(workouts) else 1
+
+
+def cmd_logs(args: argparse.Namespace) -> int:
+    log_file = paths().log_file
+    if not log_file.exists():
+        print(f"No log yet at {log_file}.")
+        return 0
+    with open(log_file, encoding="utf-8", errors="replace") as handle:
+        for line in deque(handle, maxlen=args.lines):
+            print(line, end="")
+        if not args.follow:
+            return 0
+        try:
+            while True:
+                line = handle.readline()
+                if line:
+                    print(line, end="", flush=True)
+                else:
+                    time.sleep(1)
+        except KeyboardInterrupt:
+            return 0
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    if args.action == "install":
+        result = schedule.install(parse_interval(args.every), dry_run=args.dry_run)
+    elif args.action == "remove":
+        result = schedule.remove()
+    else:
+        result = schedule.status()
+        print(f"{'on' if result.installed else 'off'} ({result.backend})")
+    for line in result.lines:
+        print(line)
+    if args.action == "remove" and not result.lines:
+        print("No schedule was installed.")
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+# ---------------------------------------------------------------------- main
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gh-sync", description="Two-way sync between a Garmin watch and Hevy"
+        prog="garmin-hevy-sync",
+        description="Two-way sync between a Garmin watch and Hevy.",
+        epilog="Start with `garmin-hevy-sync setup`. Docs: "
+        "https://danieltyukov.github.io/garmin-hevy-sync/",
     )
-    parser.add_argument("-v", "--verbose", action="store_true")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+    parser.add_argument(
+        "--home", metavar="PATH", help=f"settings and state folder (env {HOME_ENV})"
+    )
+    sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
-    p_sync = sub.add_parser("sync", help="run the sync flows (default: all five)")
-    p_sync.add_argument(
-        "--flows", nargs="+", choices=["a", "b", "c", "d", "e"],
-        help="a=Hevy->Garmin  b=Garmin->Hevy  c=routines->Garmin  "
-             "d=body measurements  e=make pushed exercise names render",
-    )
-    p_sync.add_argument("--dry-run", action="store_true", help="report without writing")
-    p_sync.set_defaults(func=cmd_sync)
+    p = sub.add_parser("setup", help="interactive first-time setup (safe to re-run)")
+    p.add_argument("--no-schedule", action="store_true", help="do not install the background sync")
+    p.add_argument("--every", default="30m", help="background interval (default 30m)")
+    p.set_defaults(func=cmd_setup, console=logging.WARNING)
 
-    sub.add_parser("status", help="show the sync ledger").set_defaults(func=cmd_status)
-    sub.add_parser("unmapped", help="Garmin exercises with no Hevy match").set_defaults(
-        func=cmd_unmapped
+    p = sub.add_parser("sync", help="run the sync flows (default: all five)")
+    p.add_argument(
+        "--flows",
+        nargs="+",
+        choices=FLOWS,
+        metavar="FLOW",
+        help="a=Hevy workouts->Garmin  b=watch sessions->Hevy  c=routines->Garmin  "
+        "d=weigh-ins->Hevy  e=repair exercise names",
     )
-    sub.add_parser("doctor", help="verify credentials and connectivity").set_defaults(
-        func=cmd_doctor
+    p.add_argument("--dry-run", action="store_true", help="report what would happen, write nothing")
+    p.add_argument(
+        "--every", metavar="INTERVAL", help="keep running, syncing every INTERVAL (e.g. 30m)"
     )
-    sub.add_parser("login", help="one-time interactive Garmin sign-in (handles MFA)").set_defaults(
-        func=cmd_login
-    )
+    p.set_defaults(func=cmd_sync, console=logging.INFO)
 
-    p_push = sub.add_parser("push-to-watch", help="force planned workouts onto the watch")
-    p_push.add_argument("--limit", type=int, default=25)
-    p_push.set_defaults(func=cmd_push_to_watch)
+    p = sub.add_parser("status", help="last run, schedule and ledger totals")
+    p.set_defaults(func=cmd_status, console=logging.WARNING)
 
-    args = parser.parse_args(argv)
-    setup_logging(args.verbose)
-    started = datetime.now(timezone.utc)
+    p = sub.add_parser("doctor", help="check the install, credentials and schedule")
+    p.set_defaults(func=cmd_doctor, console=logging.WARNING)
+
+    p = sub.add_parser("login", help="sign in to Garmin (handles the emailed MFA code)")
+    p.add_argument("--email", help="Garmin Connect email (default: the configured one)")
+    p.add_argument(
+        "--mfa-file", metavar="PATH", help="read the MFA code from PATH instead of the terminal"
+    )
+    p.set_defaults(func=cmd_login, console=logging.WARNING)
+
+    p = sub.add_parser("logs", help="show the sync log")
+    p.add_argument("-n", "--lines", type=int, default=50, help="lines to show (default 50)")
+    p.add_argument("-f", "--follow", action="store_true", help="keep printing new lines")
+    p.set_defaults(func=cmd_logs, console=logging.WARNING)
+
+    p = sub.add_parser("unmapped", help="Garmin exercises with no confident Hevy match")
+    p.set_defaults(func=cmd_unmapped, console=logging.WARNING)
+
+    p = sub.add_parser("push-to-watch", help="send planned workouts to the watch now")
+    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--device", type=int, default=0, help="device index if you have several")
+    p.set_defaults(func=cmd_push_to_watch, console=logging.WARNING)
+
+    p = sub.add_parser("schedule", help="background sync: install, remove or status")
+    p.add_argument("action", choices=("install", "remove", "status"))
+    p.add_argument("--every", default="30m", help="interval for install (default 30m)")
+    p.add_argument("--dry-run", action="store_true", help="show what install would write")
+    p.set_defaults(func=cmd_schedule, console=logging.WARNING)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    if args.home:
+        os.environ[HOME_ENV] = str(Path(args.home).expanduser().resolve())
+    migrated = migrate_legacy_layout(paths())
+    setup_logging(args.verbose, args.console)
+    for note in migrated:
+        logger.warning("Moved to the new layout: %s", note)
     try:
-        return int(args.func(args))
+        return int(args.func(args) or 0)
+    except ConfigError as exc:
+        _report(str(exc))
+        return 2
+    except (GarminLoginRequired, GarminUnavailable) as exc:
+        _report(str(exc))
+        return 1
     except KeyboardInterrupt:
         return 130
-    finally:
-        if args.command == "sync":
-            logger.info(
-                "Finished in %.1fs", (datetime.now(timezone.utc) - started).total_seconds()
-            )
+    except Exception:
+        # Unexpected: keep the traceback, in the log file above all, because a
+        # scheduled run's console goes nowhere.
+        logger.exception("Unexpected error in `%s`", args.command)
+        return 1
+
+
+def _report(message: str) -> None:
+    """An expected error: a clean line on stderr, and a record in the log file."""
+    print(f"error: {message}", file=sys.stderr)
+    record = logger.makeRecord(logger.name, logging.ERROR, __file__, 0, message, None, None)
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, RotatingFileHandler):
+            handler.handle(record)
 
 
 if __name__ == "__main__":

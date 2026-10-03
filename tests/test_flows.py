@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -8,7 +8,7 @@ from gh_sync import state
 from gh_sync.flows import _overlaps, _parse_hevy_time
 from gh_sync.garmin_client import parse_start
 
-NOW = datetime(2026, 7, 29, 18, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 29, 18, 0, tzinfo=UTC)
 
 
 class TestParseHevyTime:
@@ -178,9 +178,7 @@ class FakeHevyScale:
 def _settings(**overrides):
     from gh_sync.config import Settings
 
-    return Settings(
-        hevy_api_key="k", garmin_email="e", garmin_password="p", **overrides
-    )
+    return Settings(hevy_api_key="k", garmin_email="e", garmin_password="p", **overrides)
 
 
 class TestFlowDBodyMeasurements:
@@ -198,9 +196,7 @@ class TestFlowDBodyMeasurements:
         from gh_sync.flows import flow_d_body_measurements
 
         garmin = FakeGarminScale([])
-        flow_d_body_measurements(
-            garmin, FakeHevyScale(), conn, _settings(body_lookback_days=30)
-        )
+        flow_d_body_measurements(garmin, FakeHevyScale(), conn, _settings(body_lookback_days=30))
         assert garmin.window_days == 30
 
     def test_grams_are_converted_to_kilograms(self, conn):
@@ -210,9 +206,7 @@ class TestFlowDBodyMeasurements:
         entries = [{"calendarDate": "2026-03-14", "weight": 72500.0, "muscleMass": 30500.0}]
         counters = flow_d_body_measurements(FakeGarminScale(entries), hevy, conn, _settings())
         assert counters["synced"] == 1
-        assert hevy.posted == [
-            {"date": "2026-03-14", "weight_kg": 72.5, "lean_mass_kg": 30.5}
-        ]
+        assert hevy.posted == [{"date": "2026-03-14", "weight_kg": 72.5, "lean_mass_kg": 30.5}]
 
     def test_entry_without_a_date_is_counted_not_dropped(self, conn):
         """An all-zero summary must not be able to hide unreadable entries."""
@@ -229,9 +223,7 @@ class TestFlowDBodyMeasurements:
     def test_no_weigh_ins_is_distinguishable_from_unreadable_ones(self, conn):
         from gh_sync.flows import flow_d_body_measurements
 
-        counters = flow_d_body_measurements(
-            FakeGarminScale([]), FakeHevyScale(), conn, _settings()
-        )
+        counters = flow_d_body_measurements(FakeGarminScale([]), FakeHevyScale(), conn, _settings())
         assert counters["considered"] == 0
         assert counters["no_date"] == 0
 
@@ -328,9 +320,7 @@ class FakeGarminGym:
 
 def _probabilities(payload):
     return [
-        e.get("probability")
-        for s in payload["exerciseSets"]
-        for e in (s.get("exercises") or [])
+        e.get("probability") for s in payload["exerciseSets"] for e in (s.get("exercises") or [])
     ]
 
 
@@ -343,8 +333,12 @@ class TestFlowEExerciseNames:
 
         garmin = FakeGarminGym(
             [_activity(1)],
-            {"1": {"activityId": 1, "exerciseSets": [
-                _active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()]}},
+            {
+                "1": {
+                    "activityId": 1,
+                    "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()],
+                }
+            },
         )
         counters = flow_e_exercise_names(garmin, conn, _settings())
         assert counters["fixed"] == 1
@@ -356,8 +350,7 @@ class TestFlowEExerciseNames:
 
         garmin = FakeGarminGym(
             [_activity(1)],
-            {"1": {"activityId": 1, "exerciseSets": [
-                _active_set("SQUAT", "PISTOL_SQUAT", 87.5)]}},
+            {"1": {"activityId": 1, "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 87.5)]}},
         )
         counters = flow_e_exercise_names(garmin, conn, _settings())
         assert garmin.puts == {}
@@ -368,8 +361,7 @@ class TestFlowEExerciseNames:
 
         garmin = FakeGarminGym(
             [_activity(1)],
-            {"1": {"activityId": 1, "exerciseSets": [
-                _active_set("UNKNOWN", None, 0.0)]}},
+            {"1": {"activityId": 1, "exerciseSets": [_active_set("UNKNOWN", None, 0.0)]}},
         )
         flow_e_exercise_names(garmin, conn, _settings())
         assert garmin.puts == {}
@@ -387,26 +379,27 @@ class TestFlowEExerciseNames:
     def test_only_the_probability_field_changes(self, conn):
         from gh_sync.flows import flow_e_exercise_names
 
-        original = {"activityId": 1, "exerciseSets": [
-            _active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()]}
+        original = {
+            "activityId": 1,
+            "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 0.0), _rest_set()],
+        }
         garmin = FakeGarminGym([_activity(1)], {"1": original})
         flow_e_exercise_names(garmin, conn, _settings())
 
         sent = garmin.puts["1"]
         assert len(sent["exerciseSets"]) == 2
-        for before, after in zip(original["exerciseSets"], sent["exerciseSets"]):
+        for before, after in zip(original["exerciseSets"], sent["exerciseSets"], strict=True):
             assert {k: v for k, v in after.items() if k != "exercises"} == {
                 k: v for k, v in before.items() if k != "exercises"
             }
-            for b_ex, a_ex in zip(before["exercises"], after["exercises"]):
+            for b_ex, a_ex in zip(before["exercises"], after["exercises"], strict=True):
                 assert a_ex["category"] == b_ex["category"]
                 assert a_ex["name"] == b_ex["name"]
 
     def test_a_repaired_activity_is_not_fetched_again(self, conn):
         from gh_sync.flows import flow_e_exercise_names
 
-        sets = {"1": {"activityId": 1, "exerciseSets": [
-            _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}}
+        sets = {"1": {"activityId": 1, "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}}
         garmin = FakeGarminGym([_activity(1)], sets)
         flow_e_exercise_names(garmin, conn, _settings())
         sets["1"]["exerciseSets"][0]["exercises"][0]["probability"] = 100.0
@@ -421,8 +414,7 @@ class TestFlowEExerciseNames:
 
         garmin = FakeGarminGym(
             [_activity(1)],
-            {"1": {"activityId": 1, "exerciseSets": [
-                _active_set("SQUAT", "PISTOL_SQUAT", 100.0)]}},
+            {"1": {"activityId": 1, "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 100.0)]}},
         )
         flow_e_exercise_names(garmin, conn, _settings())
         garmin.reads.clear()
@@ -446,8 +438,7 @@ class TestFlowEExerciseNames:
 
         garmin = FakeGarminGym(
             [_activity(1)],
-            {"1": {"activityId": 1, "exerciseSets": [
-                _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}},
+            {"1": {"activityId": 1, "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 0.0)]}},
         )
         garmin.put_fails_for = {"1"}
         counters = flow_e_exercise_names(garmin, conn, _settings())
@@ -464,10 +455,8 @@ class TestFlowEExerciseNames:
         garmin = FakeGarminGym(
             [_activity(1), _activity(2)],
             {
-                "1": {"activityId": 1, "exerciseSets": [
-                    _active_set("SQUAT", "PISTOL_SQUAT", 0.0)]},
-                "2": {"activityId": 2, "exerciseSets": [
-                    _active_set("PUSH_UP", "PUSH_UP", 0.0)]},
+                "1": {"activityId": 1, "exerciseSets": [_active_set("SQUAT", "PISTOL_SQUAT", 0.0)]},
+                "2": {"activityId": 2, "exerciseSets": [_active_set("PUSH_UP", "PUSH_UP", 0.0)]},
             },
         )
         counters = flow_e_exercise_names(garmin, conn, _settings())
@@ -530,9 +519,7 @@ class TestClaimedGarminActivityIds:
         import sqlite3
 
         conn = sqlite3.connect(path)
-        conn.execute(
-            "CREATE TABLE synced_workouts (hevy_id TEXT, garmin_activity_id TEXT)"
-        )
+        conn.execute("CREATE TABLE synced_workouts (hevy_id TEXT, garmin_activity_id TEXT)")
         conn.executemany("INSERT INTO synced_workouts VALUES (?, ?)", rows)
         conn.commit()
         conn.close()
