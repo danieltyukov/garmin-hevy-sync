@@ -1,0 +1,50 @@
+name: Feature request
+description: Something the sync should do that it does not do yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some gaps come from the services rather than this tool. The Hevy API has
+        no field for heart rate, for example, so heart rate cannot be carried
+        into Hevy. If you know the API supports what you are asking for, say so
+        below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: Describe it from your training routine, for example what you record on the watch and what you log in Hevy.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should happen, in which direction (Garmin to Hevy or Hevy to Garmin), and which flow it touches if you know.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - New data to sync (a new flow or direction)
+        - Change to an existing flow
+        - Setup, CLI or configuration
+        - Background schedule or platform support
+        - Installer or Docker image
+        - Failure notifications
+        - Documentation
+        - Other
+  - type: textarea
+    id: api
+    attributes:
+      label: Known API support
+      description: If you know which Garmin Connect or Hevy endpoint provides the data, describe it here. Field names and shapes are enough; do not paste real responses.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checks
+      options:
+        - label: This request contains no API keys, tokens, email addresses or personal workout data.
+          required: true
