@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Build: resolve the locked dependencies into a self-contained virtualenv.
-FROM python:3.12-slim AS build
+FROM python:3.14-slim AS build
 COPY --from=ghcr.io/astral-sh/uv:0.11 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -13,7 +13,7 @@ COPY src ./src
 RUN uv sync --locked --no-dev --no-editable
 
 # Run: the virtualenv on a slim Python, as an unprivileged user.
-FROM python:3.12-slim
+FROM python:3.14-slim
 LABEL org.opencontainers.image.title="garmin-hevy-sync" \
       org.opencontainers.image.description="Two-way sync between a Garmin watch and Hevy" \
       org.opencontainers.image.source="https://github.com/danieltyukov/garmin-hevy-sync" \
