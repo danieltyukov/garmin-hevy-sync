@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from gh_sync import config, h2g, notify, schedule
+from gh_sync import cli, config, h2g, notify, schedule
 
 
 @pytest.fixture(autouse=True)
@@ -15,8 +15,9 @@ def isolated_home(tmp_path, monkeypatch):
     all resolve under tmp_path, so no test can read or write a real install.
     Side effects that would leave the machine are stubbed as a safety net:
     the 0.1 migration source (a developer's own checkout may hold a real .env),
-    the system scheduler, desktop and push notifications, and the hevy2garmin
-    child process. Tests that exercise one of these patch it again themselves.
+    the system scheduler, desktop and push notifications, the hevy2garmin
+    child process and the Hevy lookup behind the calorie profile weight. Tests
+    that exercise one of these patch it again themselves.
     """
     monkeypatch.setattr(config, "_CHECKOUT_ROOT", tmp_path / "no-checkout")
     monkeypatch.setattr(schedule, "_systemd_user_available", lambda: False)
@@ -28,6 +29,7 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(notify, "desktop", lambda title, message: False)
     monkeypatch.setattr(notify, "push", lambda url, title, message: False)
     monkeypatch.setattr(h2g, "hevy2garmin_command", lambda: None)
+    monkeypatch.setattr(cli, "refresh_weight", lambda hevy, dry_run=False: None)
 
     user_home = tmp_path / "user"
     user_home.mkdir()
