@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Routine sync lists your Garmin workouts again. hevy2garmin 0.12.0 put the listing's query string in the URL path, which garminconnect 0.3.17 rejects, so every run logged "Could not list Garmin workouts" and deduplicated routines against its local database only. The hevy2garmin child now starts through `gh_sync.h2g_child`, which fixes the listing and then runs the hevy2garmin CLI unchanged.
+
 ## [0.2.0] - 2026-10-03
 
 Runs on Linux, macOS, Windows and Docker, installs with one command, and no longer needs a git clone.

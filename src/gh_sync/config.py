@@ -137,11 +137,12 @@ def hevy2garmin_command() -> list[str] | None:
     Runs it through the current interpreter instead of looking for a console
     script on PATH. Schedulers start this process without activating any
     virtualenv, so PATH lookups miss the sibling script, and on Windows a
-    windowless ``pythonw`` parent keeps its child windowless too.
+    windowless ``pythonw`` parent keeps its child windowless too. It starts
+    through ``h2g_child``, which fixes hevy2garmin's Garmin workout listing.
     """
     if importlib.util.find_spec("hevy2garmin") is None:
         return None
-    return [sys.executable, "-m", "hevy2garmin.cli"]
+    return [sys.executable, "-m", "gh_sync.h2g_child"]
 
 
 def running_in_container() -> bool:
