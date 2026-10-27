@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__, h2g, notify, schedule, state
+from .calorie_profile import refresh_weight
 from .config import (
     HOME_ENV,
     ConfigError,
@@ -127,6 +128,10 @@ def _run_flows(args: argparse.Namespace, background: bool) -> int:
 
     with state.connect() as conn:
         run_id = state.start_run(conn)
+
+        if "a" in selected:
+            # Flow A's calorie estimates use this weight, so it goes first.
+            refresh_weight(HevyClient(settings.hevy_api_key), dry_run=args.dry_run)
 
         for flow, key, command in (
             ("a", "a_hevy_to_garmin", ["sync"]),
